@@ -1,3 +1,4 @@
+#include "mm3d/cursor_interpolation.h"
 // Focused guest-memory checks: clang++ -std=c++20 -Isrc tools/mm3d/native_inventory_check.cpp -o /tmp/inventory-check
 #include <cassert>
 #include <fstream>
@@ -22,6 +23,7 @@
 #include "mm3d/double_time.h"
 #include "mm3d/song_reset.h"
 #include "mm3d/hud_buttons.h"
+#include "mm3d/hud_item_background.h"
 #include "mm3d/widescreen_probe.h"
 #include "mm3d/banners.h"
 #include "mm3d/song_effect.h"
@@ -126,6 +128,81 @@ void FlipPeakChecks(){
     }
     H::Apply(H::Options{});
 }
+void MirroredItemBackgroundChecks(){
+    namespace B=MM3D::HudItemBackground;
+    namespace H=MM3D::HudAdjustments;
+    for(float scale:{.5f,1.f,2.f}) {
+        Memory m;B::Hook hook;
+        auto layout=m.Layout("HudItemIconSet"),all=m.Widget("all");m.Children(layout+8,{all});
+        const char* groups[]{"icon_item_x_g","icon_item_y_g","icon_item_1_g","icon_item_2_g"};
+        const char* bases[]{"icon_x_base","icon_y_base","icon_1_base","icon_2_base"};
+        std::vector<U32> nodes;std::array<U32,4> owners{},panes{},geometries{};
+        const auto f=[&](U32 at,float v){m.words[at]=std::bit_cast<U32>(v);};
+        const auto read=[&](U32 at){return std::bit_cast<float>(*m.Read(at));};
+        for(unsigned i=0;i<4;++i) {
+            auto group=m.Widget(groups[i]),base=m.Widget(bases[i]),embedded=m.Layout("ItemIconBase");
+            auto pane=m.Widget("bb00_ybtn",350+i*19,55+i*11),geo=m.Alloc(0x7c);
+            nodes.push_back(group);m.Children(group,{base});m.words[base+0x20]=embedded;
+            m.Children(embedded+8,{pane});m.words[pane+0x28]=geo;m.words[geo+4]=6;
+            owners[i]=embedded+8;panes[i]=pane;geometries[i]=geo;
+            // Actual Restoration atlas rectangle, arbitrary native tint/fade
+            // and world transform after HUD positioning/scaling.
+            f(geo+0x14,-19);f(geo+0x18,-19);f(geo+0x20,38);f(geo+0x24,38);
+            f(geo+0x28,48.f/512);f(geo+0x2c,0);f(geo+0x30,38.f/512);f(geo+0x34,38.f/256);
+            m.words[geo+0x10]=0x12345000;f(pane+0xe0,scale);f(pane+0xf4,scale);
+            f(pane+0xe4,.25f);f(pane+0xf0,-.25f);f(pane+0x128,.6f);f(pane+0x134,.4f);
+        }
+        m.Children(all,nodes);
+        auto hud=m.Layout("Hud2"),hudall=m.Widget("all"),group=m.Widget("item_button_g"),set=m.Widget("item_icon_set");
+        m.Children(hud+8,{hudall});m.Children(hudall,{group});m.Children(group,{set});m.words[set+0x20]=layout;
+        // The real B button may share the atlas and geometry. It must retain
+        // the full rectangle even while all four item instances are mirrored.
+        auto actions=m.Layout("Hud"),actual_b=m.Widget("b_action_button");
+        m.Children(actions+8,{actual_b});m.words[actual_b+0x28]=geometries[0];
+        const auto sp=m.Alloc(0x5000)+0x5000;const auto original=m.words;
+        auto defaults=H::FreshDefaults();defaults.mirror_item_buttons=false;H::Apply(defaults);
+        assert(hook.Root(m,layout,layout+8,sp)==layout+8&&m.words==original);
+        assert(hook.scratch.End(m)==0&&m.words==original);
+        H::mirror_item_buttons=true;
+        assert(hook.Root(m,actions,actions+8,sp)==actions+8&&m.words==original);hook.scratch.End(m);
+        for(U32 target:{layout,hud}) {
+            const auto root=hook.Root(m,target,target+8,sp);assert(root!=target+8);
+            for(unsigned i=0;i<4;++i) {
+                assert(*m.Read(owners[i]+0x18)==2);
+                const auto list=*m.Read(owners[i]+0x14);
+                for(unsigned half=0;half<2;++half) {
+                    const auto pane=*m.Read(list+4*half),geo=*m.Read(pane+0x28);
+                    for(U32 offset:{0xe0u,0xe4u,0xecu,0xf0u,0xf4u,0xfcu,0xd4u,0x128u,0x134u})
+                        assert(*m.Read(pane+offset)==original.at(panes[i]+offset));
+                    assert(read(geo+0x18)==-19.f+half*19&&read(geo+0x24)==19);
+                    assert(read(geo+0x14)==-19&&read(geo+0x20)==38);
+                    assert(read(geo+0x2c)==(half?19.f:38.f)/256);
+                    assert(read(geo+0x34)==(half?19.f:-19.f)/256);
+                    for(U32 offset:{0x10u,0x28u,0x30u})
+                        assert(*m.Read(geo+offset)==original.at(geometries[i]+offset));
+                }
+                // Source geometry and overlaid letters/items never change.
+                for(U32 offset=0;offset<0x7c;offset+=4)
+                    assert(*m.Read(geometries[i]+offset)==original.at(geometries[i]+offset));
+            }
+            auto rendered=m.words;
+            assert(hook.Root(m,layout,layout+8,root)==layout+8&&m.words==rendered);
+            assert(hook.scratch.End(m)==0&&m.words==rendered);
+            assert(hook.scratch.End(m)==sp&&m.words==original);
+        }
+        // Reject incomplete layouts or unavailable stack space without any
+        // partial replacement, even if the earlier three buttons were valid.
+        m.words[geometries[3]+4]=3;auto bad=m.words;
+        assert(hook.Root(m,layout,layout+8,sp)==layout+8&&m.words==bad);hook.scratch.End(m);
+        m.words=original;
+        m.words.erase(sp-4);bad=m.words;
+        assert(hook.Root(m,layout,layout+8,sp)==layout+8&&m.words==bad);hook.scratch.End(m);
+        m.words=original;
+        H::mirror_item_buttons=false;
+        assert(hook.Root(m,layout,layout+8,sp)==layout+8&&m.words==original);hook.scratch.End(m);
+    }
+    H::Apply({});
+}
 void HudButtonChecks(){
     namespace H=MM3D::HudButtons;
     Memory m;H::Hook hook;H::Options o;o.buttons[1]={12,-5,1};o.scale=2;
@@ -133,10 +210,16 @@ void HudButtonChecks(){
     assert(H::LoadSlot(o,0)&&o.buttons[1].x==12&&o.scale==2);
     H::Apply(o);
     auto layout=m.Layout("HudItemIconSet"),all=m.Widget("all");m.Children(layout+8,{all});
-    std::vector<U32> groups;std::array<U32,4> icons{};
+    std::vector<U32> groups;std::array<U32,4> icons{};std::array<std::array<U32,3>,4> contents{};
     const char* names[]{"icon_item_1_g","icon_item_x_g","icon_item_y_g","icon_item_2_g"};
     const char* bases[]{"btn_corner01_g","btn_x_g","btn_y_g","btn_corner03_g"};
     for(unsigned i=0;i<4;++i){icons[i]=m.Widget(names[i],300+i*10,20);groups.push_back(icons[i]);groups.push_back(m.Widget(bases[i]));}
+    for(unsigned i=0;i<4;++i) {
+        unsigned c=0;for(const char* name:{"letter","item","count"}) {
+            contents[i][c]=m.Widget(name,301+i*10+c,21+c);++c;
+        }
+        m.Children(icons[i],{contents[i][0],contents[i][1],contents[i][2]});
+    }
     m.Children(all,groups);auto original=m.words;
     hook.Begin(m,layout);assert(std::bit_cast<float>(*m.Read(icons[1]+0xec))==322);
     assert(std::bit_cast<float>(*m.Read(icons[1]+0xfc))==15);
@@ -169,7 +252,30 @@ void HudButtonChecks(){
         assert(std::abs(std::hypot(xy[0][0]-xy[2][0],xy[0][1]-xy[2][1])-2*gap)<.001f);
         hook.End(m);assert(m.words==original);
     }
-    H::Apply(H::Options{});
+    // Both individual layouts and saved diamond layouts exchange complete
+    // groups without changing stored coordinates, native data, or X/Y/A/B.
+    o.buttons[4]={13,17,1};o.buttons[5]={-23,37,1};
+    for(bool diamond:{false,true})for(bool clicks:{false,true,false}) {
+        o.diamond.enabled=diamond;o.diamond.spacing=31;o.diamond.rotation=25;
+        H::SaveSlot(o,1);const auto saved=o.presets[1];H::Apply(o);
+        MM3D::StickControls::Configure(clicks);original=m.words;
+        hook.Begin(m,layout);
+        for(unsigned n:{0u,3u}) {
+            const unsigned index=n==0?4:5,slot=MM3D::StickControls::ItemLayoutIndex(index,4);
+            const unsigned source=slot==4?0:3;
+            const auto target=diamond?H::DiamondPoint(slot,o.diamond):
+                std::array<float,2>{300.f+source*10+o.buttons[slot].x,20+o.buttons[slot].y};
+            assert(std::abs(std::bit_cast<float>(*m.Read(icons[n]+0xec))-target[0])<.001f);
+            assert(std::abs(std::bit_cast<float>(*m.Read(icons[n]+0xfc))-target[1])<.001f);
+            for(unsigned c=0;c<3;++c) {
+                assert(std::abs(std::bit_cast<float>(*m.Read(contents[n][c]+0xec))-(target[0]+(1+c)*o.scale))<.001f);
+                assert(std::abs(std::bit_cast<float>(*m.Read(contents[n][c]+0xfc))-(target[1]+(1+c)*o.scale))<.001f);
+            }
+        }
+        hook.End(m);assert(m.words==original);
+        assert(H::LoadSlot(o,1)&&o.buttons[4].x==saved[4].x&&o.buttons[5].y==saved[5].y);
+    }
+    MM3D::StickControls::Configure(false);H::Apply(H::Options{});
 }
 void FullscreenEffectsChecks(){
     namespace W=MM3D::WidescreenProbe;
@@ -488,7 +594,7 @@ void NotebookPromptChecks() {
     const auto panel_all=m.Widget("all"),detail=m.Widget("quest_list_detail"),text=m.Widget("description");
     m.Children(layout+8,{panel_all});m.Children(panel_all,{detail});m.Children(detail,{text});
     const auto tg=m.Alloc(0x30c),font=m.Alloc(0x14),header=m.Alloc(0x2c),pages=m.Alloc(8);
-    std::string chars=std::string(P::Label)+std::string(P::MapLabel)+std::string(P::ScheduleLabel)+std::string(P::AlarmLabel)+std::string(P::EventsLabel)+std::string(P::ScheduleDetailsLabel)+"Song listBackReturnMove cursorItemsChange tabChooseEquip to IIZR +/Zoom InOut";std::sort(chars.begin(),chars.end());chars.erase(std::unique(chars.begin(),chars.end()),chars.end());
+    std::string chars=std::string(P::Label)+std::string(P::MapLabel)+std::string(P::ScheduleLabel)+std::string(P::AlarmLabel)+std::string(P::EventsLabel)+std::string(P::ScheduleDetailsLabel)+"Song listBackReturnMove cursorItemsChange tabChooseEquip to IIZR +/Zoom inout";std::sort(chars.begin(),chars.end());chars.erase(std::unique(chars.begin(),chars.end()),chars.end());
     const auto records=m.Alloc(chars.size()*12);
     m.words[text+0x28]=tg;m.words[tg+4]=3;m.words[tg+0x28]=font;
     m.words[font+4]=header;m.words[font+0xc]=pages;m.words[font+0x10]=records;
@@ -1021,20 +1127,46 @@ void NotebookPromptChecks() {
             m.Children(bg+8,{bg_group});m.Children(bg_group,{map_pane});
             m.words[map_pane+0x134]=std::bit_cast<U32>(.6f);
             map_hook.valid=map_hook.dungeon=true;map_hook.pass=3;map_hook.panel=panel;map_hook.routed={panel};map_hook.backgrounds[1]=bg;
-            P::pose.scale=1;P::icon_scale=1;P::pose.y=0;P::map_pose.y=-16.1f;
+            MM3D::DungeonMap::Options map_options;map_options.prompts.spacing=16.1f;
+            MM3D::DungeonMap::Apply(map_options);
+            // Notebook changes must no longer move or resize dungeon hints.
+            P::pose.scale=1.5f;P::icon_scale=1.75f;P::pose.y=80;P::map_pose.y=-40;
             auto before=m.words;auto root=map_hook.PromptRoot(m,panel,sp,true);
             assert(root!=panel+8&&m.words[root+0x18]==9);
             auto children=m.words[root+0x14];assert(m.words[children+32]==panel+8);
+            std::array<float,2> original_x{},original_y{};
             for(unsigned row=0;row<2;++row) {
                 auto icon=m.words[children+row*16],label=m.words[children+row*16+4];
                 auto geo=m.words[icon+0x28],text_geo=m.words[label+0x28];
                 assert(std::bit_cast<float>(m.words[geo+0x28])==float(row?128:96)/256);
                 assert(std::bit_cast<float>(m.words[geo+0x2c])==(row?0.f:16.f/128));
                 assert(m.words[text_geo+0x300]==(row?6u:11u));
+                original_x[row]=std::bit_cast<float>(m.words[icon+0xec]);
+                original_y[row]=std::bit_cast<float>(m.words[icon+0xfc]);
+                assert(std::bit_cast<float>(m.words[icon+0xe0])==1.f);
                 assert(std::bit_cast<float>(m.words[icon+0x134])==.6f);
-                assert(std::abs(std::bit_cast<float>(m.words[label+0xfc])-(row?222.f:205.9f))<.001f);
+                assert(std::abs(std::bit_cast<float>(m.words[label+0xfc])-(row?222.f:189.8f))<.001f);
             }
             assert(map_hook.map_prompts.scratch.End(m)==sp&&m.words==before);
+            map_options.prompts.x=35;map_options.prompts.y=-12;
+            MM3D::DungeonMap::Apply(map_options);
+            root=map_hook.PromptRoot(m,panel,sp,true);children=m.words[root+0x14];
+            for(unsigned row=0;row<2;++row) {
+                const auto icon=m.words[children+row*16];
+                assert(std::abs(std::bit_cast<float>(m.words[icon+0xec])-original_x[row]-35)<.001f);
+                assert(std::abs(std::bit_cast<float>(m.words[icon+0xfc])-original_y[row]+12)<.001f);
+            }
+            assert(map_hook.map_prompts.End(m)==sp&&m.words==before);
+            map_options.prompts.scale=.75f;map_options.prompts.icon_scale=1.25f;
+            MM3D::DungeonMap::Apply(map_options);
+            root=map_hook.PromptRoot(m,panel,sp,true);children=m.words[root+0x14];
+            for(unsigned row=0;row<2;++row) {
+                const auto icon=m.words[children+row*16];
+                assert(std::bit_cast<float>(m.words[icon+0xe0])==.75f*1.25f);
+            }
+            assert(map_hook.map_prompts.End(m)==sp&&m.words==before);
+            MM3D::DungeonMap::Apply({});
+            P::pose.scale=1;P::icon_scale=1;P::pose.y=0;P::map_pose.y=-16.1f;
             map_hook.pass=5;assert(map_hook.PromptRoot(m,panel,sp,true)==panel+8);
             map_hook.map_prompts.scratch.End(m);assert(m.words==before);
             // Mirrored Items navigation uses the selected defaults on both
@@ -1115,7 +1247,7 @@ void NotebookPromptChecks() {
                             auto children=m.words[z+0x14],icon=m.words[children],text=m.words[children+4],geo=m.words[text+0x28];
                             assert(m.words[children+16]==composed);
                             assert(std::bit_cast<float>(m.words[m.words[icon+0x28]+0x28])==144.f/256);
-                            std::string_view label=state?"Zoom Out":"Zoom In";
+                            std::string_view label=state?"Zoom out":"Zoom in";
                             assert(m.words[geo+0x300]==label.size());
                             auto records=m.words[geo+0x2fc];float pen=0;
                             for(unsigned i=0;i<label.size();++i) {
@@ -2404,6 +2536,9 @@ void SongListChecks() {
     }
 }
 void DungeonMapShadowChecks() {
+    // Without brown panels the original background pass owns the shadow.
+    const bool sides=MM3D::DungeonMap::side_panels.exchange(false);
+    const bool strip=MM3D::DungeonMap::top_strip.exchange(false);
     Memory m;MM3D::DungeonMap::Hook hook;
     auto map=m.Layout("BackGround"),group=m.Widget("backGround"),pane=m.Widget("map_base",40,12);
     auto brown=m.Layout("CommonBottomBg"),geometry=m.Alloc(0x7c);
@@ -2441,12 +2576,65 @@ void DungeonMapShadowChecks() {
     assert(hook.ShadowRoot(m,map,sp)==map+8);hook.shadow_scratch.End(m);assert(m.words==before);
     hook.pass=1;m.words.erase(sp-0x3400);before=m.words;
     assert(hook.ShadowRoot(m,map,sp)==map+8);hook.shadow_scratch.End(m);assert(m.words==before);
+    MM3D::DungeonMap::side_panels=sides;MM3D::DungeonMap::top_strip=strip;
 }
 void DungeonMapChecks() {
     namespace D=MM3D::DungeonMap;namespace Q=MM3D::NativeMinimap;
     Memory m;D::Hook h;D::Options o;D::Apply(o);
     const auto owner=m.Alloc(0x2100),panel=m.Layout("MenuMapDungeon",0,0,0x300),all=m.Widget("all");
     m.words[owner+0x18]=panel;m.Children(panel+8,{all});
+    {
+        // Overview movement is suppressed without clearing shared input or
+        // modifying cursor coordinates, floor selection, or the A zoom toggle.
+        assert(D::FirstSVC+D::PCs.size()<=MM3D::SongEffect::FirstSVC);
+        assert(D::Instruction(D::PCs[7],D::Words[7])==0xefffffa7);
+        assert(D::Instruction(D::PCs[7],D::Words[7]^1)==(D::Words[7]^1));
+        for(U32 zoom:{0u,1u,2u,3u,4u}) {
+            m.words[0x7786f8]=(zoom<<24)|0x011234;
+            const auto before=m.words;
+            assert(D::OverviewCursorNext(m,owner)==(zoom==3?D::OverviewCursorEnd:D::PCs[7]+4));
+            assert(D::FilterA(m,owner,0xffffffff)==0xffffffff&&m.words==before);
+        }
+        m.words[0x7786f8]=0x03011234;
+        for(U32 mode:{0x100u,0x10000u,0x200u}) {
+            m.words[owner+0x78c]=mode;
+            assert(D::OverviewCursorNext(m,owner)==D::PCs[7]+4);
+        }
+        m.words[owner+0x78c]=0;
+        D::enabled=false;assert(D::OverviewCursorNext(m,owner)==D::PCs[7]+4);D::enabled=true;
+        assert(D::OverviewCursorNext(m,0)==D::PCs[7]+4);
+        m.words.erase(0x7786f8);
+        assert(D::OverviewCursorNext(m,owner)==D::PCs[7]+4);
+    }
+    {
+        // Only an accepted A toggle becomes a remembered preference. Native
+        // exit restores gameplay mode 2; re-entry must still select mode 3.
+        const auto game=m.Alloc(0x170),other_game=m.Alloc(0x170);
+        for(auto g:{game,other_game}){m.words[g+0x13c]=0x0402;m.words[g+0x148]=0x44;}
+        assert(h.EntryZoom(m,game)==1);
+        h.RememberZoom(m,owner,game,3);const auto selected=m.words;
+        assert(h.EntryZoom(m,game)==3&&m.words==selected);
+        m.words[0x7786f8]=0x02011234; // native exit and other-tab state
+        assert(h.EntryZoom(m,game)==3&&h.EntryZoom(m,game)==3);
+        m.words[0x7786f8]=0x03011234; // temporary gameplay minimap overview
+        assert(h.EntryZoom(m,game)==3);
+        h.RememberZoom(m,owner,game,1);assert(h.EntryZoom(m,game)==1);
+        h.RememberZoom(m,owner,game,3);assert(h.EntryZoom(m,game)==3);
+        for(unsigned invalid:{0u,2u,4u})h.RememberZoom(m,owner,game,invalid);
+        assert(h.EntryZoom(m,game)==3);
+        for(U32 mode:{0x100u,0x10000u}) { // overworld and soaring cannot overwrite it
+            m.words[owner+0x78c]=mode;h.RememberZoom(m,owner,game,1);
+            assert(h.EntryZoom(m,game)==3);
+        }
+        m.words[owner+0x78c]=0;
+        assert(h.EntryZoom(m,other_game)==1&&h.EntryZoom(m,0)==1);
+        m.words[game+0x148]=0x45;assert(h.EntryZoom(m,game)==1); // unrelated scene
+        m.words[game+0x148]=0x44;m.words[game+0x13c]=0x0302;
+        assert(h.EntryZoom(m,game)==1);
+        m.words[game+0x13c]=0x0402;D::enabled=false;assert(h.EntryZoom(m,game)==1);
+        h.RememberZoom(m,owner,game,1);D::enabled=true;assert(h.EntryZoom(m,game)==3);
+        h.zoom_choice.reset();
+    }
     m.words[owner+0xc]=m.Layout("UpWorldMapBG");m.words[owner+0x1c]=m.Layout("UpWorldMapHud");
     std::vector<U32> groups;
     for(const char* n:{"icon_touch_direct","cursor_loupe_g","disp_no_map_g","disp_wing_g","item_set_base_g","slide_gauge_g","btn_place_name_g","btn_expansion_g","btn_reduction_g","btn_return_l","bb_map_area_g"})groups.push_back(m.Widget(n,80,60));
@@ -2462,8 +2650,8 @@ void DungeonMapChecks() {
         for(unsigned i=0;i<D::Count;++i)o.poses[i]={float(10+i),float(-20+i),.5f+float(i)*.1f};D::Apply(o);
         h.Capture(m,owner);assert(h.valid&&h.dungeon==dungeon);
         const auto before_skip=m.words;assert(h.SkipWorld(m,owner)==dungeon&&m.words==before_skip);
-        // A is the disabled native zoom action on both recognized map modes.
-        assert(D::FilterA(m,owner,0x403)==0x402u);
+        // A zoom is native in dungeons and remains disabled on the world map.
+        assert(D::FilterA(m,owner,0x403)==(dungeon?0x403u:0x402u));
         h.Pass(m,manager,4);
         assert(m.words[q[4]+0x844]==0&&m.words[q[5]+0x844]==1);
         assert(m.words[q[1]+0x844]==unsigned(dungeon)*2&&m.words[q[3]+0x844]==unsigned(dungeon)*2);
@@ -2803,29 +2991,43 @@ void CutsceneFovChecks() {
     m.words[game+0xa78]=4<<16;assert(C::ConfiguredFov(m,projection)==65);
     C::desired_fov=45;
 }
-void GearPhotoPoseChecks() {
-    Memory m;Hook h;const auto page=m.Alloc(0x200),photo=m.Layout("GearPhoto");
-    const auto left=m.Widget("picture_left_pane",120,80),right=m.Widget("picture_right_pane",120,80);
-    const auto border=m.Widget("frame",116,76),corner=m.Widget("frame_corner",284,164);
-    m.Children(photo+8,{left,right,border});m.Children(border,{corner});
-    m.words[0x656b0c]=page;m.words[0x72f5bc+8]=page;
-    m.words[page]=0x63a270;m.words[page+0x10]=photo;
-    MM3D::GearMenu::Options options;options.poses[MM3D::GearMenu::Photo]={100,15,.5f};
-    MM3D::GearMenu::Apply(options);const auto before=m.words;
-    h.Begin(m,photo);
-    for(auto node:{left,right,border,corner}) {
-        const float x=std::bit_cast<float>(before.at(node+0xec));
-        const float y=std::bit_cast<float>(before.at(node+0xfc));
-        assert(std::abs(std::bit_cast<float>(*m.Read(node+0xec))-(100+200+.5f*(x-200)))<.001f);
-        assert(std::abs(std::bit_cast<float>(*m.Read(node+0xfc))-(15+120+.5f*(y-120)))<.001f);
-    }
-    h.End(m);assert(m.words==before);
-    // The shared photo layout must retain native placement outside Gear.
-    m.words[0x72f5bc+8]=0;const auto outside=m.words;
-    h.Begin(m,photo);h.End(m);assert(m.words==outside);
-    MM3D::GearMenu::Apply(MM3D::GearMenu::Options{});
+void CursorInterpolationChecks() {
+    namespace L=MM3D::MessageLayout;namespace C=MM3D::CursorInterpolation;
+    Memory m;auto layout=m.Layout("CursorItemCollect"),pane=m.Widget("frame_def_pane00");
+    m.Children(layout+8,{pane});const auto geo=m.Alloc(0x80);m.words[pane+0x28]=geo;m.words[geo+4]=6;
+    const auto put=[&](U32 at,float f){m.words[at]=std::bit_cast<U32>(f);};
+    put(layout+8+0x134,1);put(pane+0x134,1);
+    for(unsigned r=0;r<3;++r)put(pane+0xe0+r*16+r*4,1);
+    put(pane+0xec,103.123f);put(pane+0xfc,50);put(geo+0x20,16);put(geo+0x24,16);
+    put(geo+0x28,.25f);put(geo+0x2c,.5f);put(geo+0x30,.125f);put(geo+0x34,.125f);
+    put(pane+0x110,1);put(pane+0x120,1);
+    const auto before=m.words;const auto panels=L::ReadCursors(m,layout);
+    assert(panels.size()==1&&m.words==before);
+    C::Values u{};u[10]={0,3,90,1};u[14]={0,3,90,1};
+    for(unsigned r=0;r<3;++r){u[11+r]=panels[0].transform[r];u[15+r]=u[11+r];}
+    u[15][0]+=30; // Same atlas, different pane in the same batch.
+    for(unsigned r=0;r<2;++r)u[90+r]=panels[0].uv[r];
+    C::Publish(10,99,panels);assert(C::Mask(10,99,u,12)==1);
+    assert(C::Mask(11,99,u,12)==1&&C::Mask(12,99,u,12)==0&&C::Mask(10,100,u,12)==0);
+    auto rounded=u;for(auto& row:rounded)for(float& f:row)f=std::bit_cast<float>(std::bit_cast<U32>(f)&~127u);
+    assert(C::Mask(10,99,rounded,12)==1);
+    auto wrong=u;wrong[90][1]+=.125f;assert(C::Mask(10,99,wrong,12)==0);
+    MM3D::InventoryInterpolation::Pose inv;inv.values=u;inv.rows.fill(true);inv.alpha=.75f;
+    inv.values[11][0]-=10;inv.values[15][0]-=10;C::Snap(inv,u,1);
+    assert(inv.values[11]==u[11]&&inv.values[15][0]==u[15][0]-10&&inv.alpha==.75f);
+    MM3D::FileSelectInterpolation::Pose file;file.count=2;file.x={1,2};file.y={3,4};file.alpha=.5f;file.rectangles.emplace();
+    C::Snap(file,u,1);assert(file.x[0]==u[11][0]&&file.x[1]==2&&file.y[0]==u[12][0]&&file.y[1]==4&&file.alpha==.5f);
+    assert((*file.rectangles)[0]==u[11]&&(*file.rectangles)[1]==u[12]&&(*file.rectangles)[2][0]==0);
+    MM3D::ItemSlideInterpolation::Pose item;item.count=2;item.x={1,2};C::Snap(item,u,1);
+    assert(item.x[0]==u[11][0]&&item.x[1]==2);
+    m.words[pane+0xd4]&=~1u;assert(L::ReadCursors(m,layout).empty());m.words=before;
+    m.Children(pane,{pane});assert(L::ReadCursors(m,layout).empty());m.words=before;
+    auto unrelated=m.Layout("MenuItem");m.Children(unrelated+8,{pane});assert(L::ReadCursors(m,unrelated).empty());
+    auto menu=m.Layout("FileSelect"),group=m.Widget("cursor_g"),art=m.Widget("file_plate");
+    m.Children(menu+8,{group,art});m.Children(group,{pane});put(group+0x134,1);
+    const auto file_panels=L::ReadCursors(m,menu);assert(file_panels.size()==1&&file_panels[0].source[1]==pane);
+    C::Publish(1,100,file_panels);assert(C::Mask(10,99,u,12)==0);
 }
-
 void SharedMessageChecks() {
     namespace L=MM3D::MessageLayout;namespace I=MM3D::MessageInterpolation;
     Memory m;auto layout=m.Layout("MessageWindow",0,0,0x500),all=m.Widget("all"),plate=m.Widget("plate"),pane=m.Widget("window_plate");
@@ -2911,8 +3113,68 @@ void SharedMessageChecks() {
 
 }
 
+void GearPhotoPoseChecks() {
+    Memory m;Hook h;const auto page=m.Alloc(0x200),photo=m.Layout("GearPhoto");
+    const auto left=m.Widget("picture_left_pane",120,80),right=m.Widget("picture_right_pane",120,80);
+    const auto border=m.Widget("frame_base_pane",116,76),corner=m.Widget("frame_corner",284,164);
+    m.Children(photo+8,{left,right,border});m.Children(border,{corner});
+    const auto geo=m.Alloc(0x7c);m.words[border+0x28]=geo;m.words[geo+4]=5;
+    m.words[geo+0x14]=std::bit_cast<U32>(-104.f);m.words[geo+0x18]=std::bit_cast<U32>(-64.f);
+    m.words[geo+0x20]=std::bit_cast<U32>(208.f);m.words[geo+0x24]=std::bit_cast<U32>(128.f);
+    m.words[0x656b0c]=page;m.words[0x72f5bc+8]=page;
+    m.words[page]=0x63a270;m.words[page+0x10]=photo;
+    MM3D::GearMenu::Options options;options.poses[MM3D::GearMenu::Photo]={100,15,.5f};
+    MM3D::GearMenu::Apply(options);const auto before=m.words;
+    h.Begin(m,photo);
+    for(auto node:{left,right,border,corner}) {
+        const float x=std::bit_cast<float>(before.at(node+0xec));
+        const float y=std::bit_cast<float>(before.at(node+0xfc));
+        assert(std::abs(std::bit_cast<float>(*m.Read(node+0xec))-(100+200+.5f*(x-200)))<.001f);
+        assert(std::abs(std::bit_cast<float>(*m.Read(node+0xfc))-(15+120+.5f*(y-120)))<.001f);
+    }
+    h.End(m);assert(m.words==before);
+    MM3D::PhotoCapture::layout=photo;
+    h.Begin(m,photo,true);
+    assert(std::bit_cast<float>(*m.Read(geo+0x20))==207.5f);
+    assert(std::bit_cast<float>(*m.Read(geo+0x14))==-103.75f);
+    for(auto node:{left,right,border,corner}) {
+        const float x=std::bit_cast<float>(before.at(node+0xec));
+        assert(std::abs(std::bit_cast<float>(*m.Read(node+0xec))-(300+(8.f/15.f)*(x-200)))<.001f);
+    }
+    h.End(m);assert(m.words==before);
+    // Shutter preview widens the full photo/frame without applying Gear controls.
+    MM3D::PhotoCapture::enabled=false;
+    h.Begin(m,photo,true);
+    assert(std::bit_cast<float>(*m.Read(geo+0x20))==208.f);
+    for(auto node:{left,right,border,corner}) {
+        const float x=std::bit_cast<float>(before.at(node+0xec));
+        assert(std::abs(std::bit_cast<float>(*m.Read(node+0xec))-(300+.5f*(x-200)))<.001f);
+    }
+    h.End(m);assert(m.words==before);
+    MM3D::PhotoCapture::enabled=true;
+    m.words[0x72f5bc+8]=0;const auto preview=m.words;
+    h.Begin(m,photo,true);
+    assert(std::bit_cast<float>(*m.Read(geo+0x20))==207.5f);
+    assert(std::bit_cast<float>(*m.Read(geo+0x14))==-103.75f);
+    for(auto node:{left,right,border,corner}) {
+        const float x=std::bit_cast<float>(preview.at(node+0xec));
+        assert(std::abs(std::bit_cast<float>(*m.Read(node+0xec))-(200+(16.f/15.f)*(x-200)))<.001f);
+    }
+    h.End(m);assert(m.words==preview);
+    h.Begin(m,photo,false);h.End(m);assert(m.words==preview);
+    MM3D::PhotoCapture::enabled=false;
+    h.Begin(m,photo,true);assert(m.words==preview);h.End(m);
+    MM3D::PhotoCapture::enabled=true;
+    MM3D::PhotoCapture::layout=0;
+    // The shared photo layout must retain native placement outside Gear.
+    m.words[0x72f5bc+8]=0;const auto outside=m.words;
+    h.Begin(m,photo);h.End(m);assert(m.words==outside);
+    MM3D::GearMenu::Apply(MM3D::GearMenu::Options{});
+}
+
 int main(int argc,char** argv) {
     GearPhotoPoseChecks();
+    CursorInterpolationChecks();
     SharedMessageChecks();
     {
         // Captured low/scaled Gear tabs must start hidden but be visible
@@ -3005,6 +3267,7 @@ int main(int argc,char** argv) {
     SmallGameplayMapChecks();
     FlipPeakChecks();
     HudButtonChecks();
+    MirroredItemBackgroundChecks();
     FullscreenEffectsChecks();
     SongResetChecks();
     BannerChecks();
@@ -3034,6 +3297,15 @@ int main(int argc,char** argv) {
         assert(MM3D::SongList::CodeMatches(code));
         for(U32 at:{0x596c24u,0x596cb8u,0x596cbcu,0x594480u,0x596c20u,0x596cb4u,0x594484u,0x36e294u,0x175c30u,0x596cecu,0x596ce8u,0x596ff4u}) {
             U32 word=0;f.seekg(at-0x100000);f.read(reinterpret_cast<char*>(&word),4);assert(f);code.words[at]=word;
+        }
+        for(U32 at:MM3D::DungeonMap::PCs) {
+            U32 word=0;f.seekg(at-0x100000);f.read(reinterpret_cast<char*>(&word),4);assert(f);code.words[at]=word;
+        }
+        for(auto [at,expected]:MM3D::DungeonMap::ZoomGuards) {
+            U32 word=0;f.seekg(at-0x100000);f.read(reinterpret_cast<char*>(&word),4);assert(f&&word==expected);code.words[at]=word;
+        }
+        for(auto [at,expected]:MM3D::DungeonMap::OverviewCursorGuards) {
+            U32 word=0;f.seekg(at-0x100000);f.read(reinterpret_cast<char*>(&word),4);assert(f&&word==expected);code.words[at]=word;
         }
         assert(MM3D::DungeonMap::CodeMatches(code));
         code.words[MM3D::DungeonMap::PCs[0]]^=1;assert(!MM3D::DungeonMap::CodeMatches(code));
@@ -3793,7 +4065,19 @@ int main(int argc,char** argv) {
         assert(!MM3D::ScheduleDetail::Prepare(nm,sp,np,nh.helper,writes));assert(nm.words==before);
     }
     {
-        Memory fade;MM3D::NativeNotebook::Hook h;
+        struct FadeMemory : Memory {
+            unsigned invalid_reads=0;
+            std::optional<U32> Read(U32 at) {
+                if(!Pointer(at))++invalid_reads;
+                return Memory::Read(at);
+            }
+        } fade;
+        MM3D::NativeNotebook::Hook h;
+        for(U32 owner:{0u,3u,0xfffffffcu}) {
+            h.notebook_owner=owner;h.detail_opacity=0;
+            h.MapFade(fade);
+            assert(h.detail_opacity==1 && fade.invalid_reads==0);
+        }
         auto owner=fade.Alloc(0x800),map=fade.Layout("UpEventMap"),all=fade.Widget("all");
         auto board=fade.Widget("blackboard_g"),content=fade.Widget("event_map_g"),player=fade.Alloc(0x20);
         fade.Children(map+8,{all});fade.Children(all,{board,content});
@@ -3813,6 +4097,8 @@ int main(int argc,char** argv) {
         fade.words[owner+0x4c]=255;fade.words[board+0x134]=std::bit_cast<U32>(1.f);
         h.MapFade(fade);assert(h.detail_opacity==1); // stale hidden-map alpha ignored
         fade.words[player+8]=1;h.MapFade(fade);assert(h.detail_opacity==0); // closing still fades
+        fade.words[owner+0x58]=0;h.MapFade(fade);
+        assert(h.detail_opacity==1 && fade.invalid_reads==0);
     }
     {
         Memory m;MM3D::NativeNotebook::Hook h;h.frame[10]={240,50,.5f};

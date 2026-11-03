@@ -44,9 +44,10 @@ int main(int argc,char** argv) {
         Memory m(original);U32 entry=m.Entry(r.id);assert(entry);
         const U32 offset=*m.Read(entry+12),size=*m.Read(entry+16);
         Apply(m,Memory::Self,r.id);assert(m.writes>0);
+        const auto desired=Value(r.text);
         for(U32 i=0;i<original.size();++i) {
             unsigned char expected=original[i];
-            if(i>=offset&&i<offset+size)expected=i-offset<r.text.size()?Value(r.text)[i-offset]:0;
+            if(i>=offset&&i<offset+size)expected=i-offset<desired.size()?desired[i-offset]:0;
             assert(m.data[i]==expected);
         }
         auto once=m.data;m.writes=0;Apply(m,Memory::Self,r.id);assert(m.data==once&&m.writes==0);
@@ -85,9 +86,10 @@ int main(int argc,char** argv) {
             enabled.store(mode&1);neutral_enabled.store(mode&2);
             const auto expected=(mode&2)?r.text:((mode&1)&&basic?basic->text:r.original);
             Apply(m,Memory::Self,r.id);
+            const auto resolved=Value(expected);
             for(U32 i=0;i<original.size();++i) {
                 auto value=original[i];
-                if(i>=offset&&i<offset+size)value=i-offset<expected.size()?Value(expected)[i-offset]:0;
+                if(i>=offset&&i<offset+size)value=i-offset<resolved.size()?resolved[i-offset]:0;
                 assert(m.data[i]==value);
             }
             m.writes=0;Apply(m,Memory::Self,r.id);assert(m.writes==0);
@@ -95,6 +97,33 @@ int main(int argc,char** argv) {
     }
     enabled.store(true);neutral_enabled.store(true);
     if(argc==5){check(FrenchReplacements,Load(argv[3]));check(SpanishReplacements,Load(argv[4]));}
+    const auto modes=[](const auto& modern,const auto& legacy,const auto& original) {
+        for(const auto& r:modern) {
+            Memory m(original);const U32 entry=m.Entry(r.id),offset=*m.Read(entry+12),size=*m.Read(entry+16);
+            const Replacement* old=nullptr;for(const auto& candidate:legacy)if(candidate.id==r.id)old=&candidate;
+            assert(old);
+            for(bool active:{true,false,true})for(bool clicks:{true,false,true,false}) {
+                enabled=active;MM3D::StickControls::Configure(clicks);
+                assert(Apply(m,Memory::Self,r.id));
+                const auto desired=active?(clicks?r.text:old->text):old->original;
+                const auto resolved=Value(desired);
+                for(U32 i=0;i<original.size();++i) {
+                    unsigned char expected=original[i];
+                    if(i>=offset&&i<offset+size)expected=i-offset<resolved.size()?resolved[i-offset]:0;
+                    assert(m.data[i]==expected);
+                }
+                m.writes=0;assert(Apply(m,Memory::Self,r.id)&&m.writes==0);
+                Memory bad(original);bad.data[offset]^=1;
+                const auto before=bad.data;assert(!Apply(bad,Memory::Self,r.id)&&bad.data==before&&bad.writes==0);
+            }
+        }
+        enabled=true;MM3D::StickControls::Configure(false);
+    };
+    modes(StickReplacements,Replacements,original);
+    if(argc==5) {
+        modes(StickFrenchReplacements,FrenchReplacements,Load(argv[3]));
+        modes(StickSpanishReplacements,SpanishReplacements,Load(argv[4]));
+    }
     Memory untouched(original);
     for(U32 id:{0x887,0x1273,0x191f,0x1f41,0x1f42,0x2ac1,0x5145,0xffff})Apply(untouched,Memory::Self,id);
     assert(untouched.data==original&&untouched.writes==0); // ordinary dialogue remains native

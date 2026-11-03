@@ -1,6 +1,8 @@
 // Copyright 2026 MM3D presentation contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include "mm3d/depth_of_field.h"
+#include "mm3d/ambient_occlusion.h"
 #include "mm3d/ocarina_prompt.h"
 #include "mm3d/file_select_prompt.h"
 #include "mm3d/magic_border.h"
@@ -35,11 +37,14 @@ struct Settings {
     DoubleTime::Options double_time;
     SongReset::Options song_reset;
     HudButtons::Options hud_buttons;
-    HudAdjustments::Options player_hud;
+    HudAdjustments::Options player_hud=HudAdjustments::FreshDefaults();
     Banners::Options banners;
     bool banners_migrated=false;
     DungeonMap::Options dungeon_map;
-    NativeInventory::ButtonPose world_map_zoom_prompt{0,0,.8f},world_map_native_zoom;
+    // Retain retired individual dungeon poses for profile roundtrips only.
+    // Rendering uses dungeon_map.prompts for all four rows.
+    NativeInventory::ButtonPose world_map_zoom_prompt{0,0,.8f},world_map_native_zoom,
+        dungeon_map_zoom_prompt{0,-28,.69f},dungeon_map_move_prompt{0,-44,.69f};
     NativeFileSelect::Options file_select;
     NativeItemPresent::Options item_present;
     NativeItemPresent::Options mask_present;
@@ -59,15 +64,19 @@ struct Settings {
     bool fast_time = false;
     bool double_prices = false;
     int price_multiplier = 2;
-    bool accurate_hle_audio = true;
+    int hle_audio_accuracy = 1; // 1: Balanced, 2: Accurate HLE. All pre-migration preferences become 1.
     bool mute_music = false;
     bool disable_low_health_beep = false;
     bool disable_tatl_reminders = false;
     float walk_speed = 1.f, climb_speed = 1.f, swim_speed = 1.f;
     bool single_screen_text = true;
+    bool stick_click_controls = true; // New installs; existing profiles keep original bindings.
     bool controller_neutral_item_prompts = true;
     bool fix_bloom = true;
     bool disable_fog = false;
+    bool hd_pictograph_photos = true;
+    DepthOfField::Options depth_of_field;
+    AmbientOcclusion::Options ambient_occlusion;
     bool interpolation_60fps = true;
     bool interpolation_cpu_vertices = true;
     bool classic_saving = false;
@@ -102,7 +111,7 @@ struct Settings {
     float dpad_y = 0.f;
     float dpad_offset_x = 0.f, dpad_offset_y = 0.f;
     bool minimap = true;
-    float minimap_scale = .36f, minimap_opacity = .85f;
+    float minimap_scale = .36f, minimap_opacity = .75f;
     float minimap_right_margin = 8.f, minimap_bottom_margin = 8.f;
     std::vector<WidescreenProbe::Draw> fullscreen_draws;
     float scale = 1.f;

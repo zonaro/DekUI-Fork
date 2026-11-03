@@ -53,14 +53,26 @@ int main(){
   }
   assert(hook.scratch.End(m)==sp&&m.words==before);
   // Opening and closing use the same native progress in opposite order.
+  MM3D::MenuTabs::SlideTiming expected_slide;
+  expected_slide.Apply(layout,0.f);
+  const auto clearance=[&]() {
+   float result=0;
+   for(unsigned tab=0;tab<3;++tab){
+    const auto& pose=tab?MM3D::MenuTabs::buttons[tab]:MM3D::MenuTabs::gear_pose;
+    result=std::max(result,MM3D::MenuTabs::SlideClearance(
+     pose.y.load(),pose.scale.load(),tab==selected));
+   }
+   return result;
+  };
   for(float remaining:{0.f,.25f,.75f,1.f,.75f,.25f,0.f}){
    inventory.slide_active=std::string(name)!="MenuCollect";
    inventory.slide_remaining=remaining;
    inventory.gear_slide_active=std::string(name)=="MenuCollect";
    inventory.gear_left_x=-264*remaining;
    root=hook.Root(m,inventory,layout,sp,layout+8);list=m.words[root+0x14];
+   const float expected_y=204.f+clearance()*expected_slide.Apply(layout,remaining);
    for(unsigned i=0;i<count;++i){auto n=m.words[list+i*4];
-    assert(std::abs(std::bit_cast<float>(m.words[n+0xfc])-(204+40*remaining))<.001f);
+    assert(std::abs(std::bit_cast<float>(m.words[n+0xfc])-expected_y)<.001f);
    }
    hook.scratch.End(m);assert(m.words==before);
   }
@@ -70,7 +82,8 @@ int main(){
   inventory.slide_active=true;inventory.slide_remaining=.5f;
   inventory.gear_slide_active=false;
   root=hook.Root(m,inventory,layout,sp,layout+8);list=m.words[root+0x14];
-  assert(std::abs(std::bit_cast<float>(m.words[m.words[list]+0xfc])-173.f)<.001f);
+  const float expected_y=204.f-100.f+clearance()*expected_slide.Apply(layout,.5f);
+  assert(std::abs(std::bit_cast<float>(m.words[m.words[list]+0xfc])-expected_y)<.001f);
   hook.scratch.End(m);assert(m.words==before);MM3D::MenuTabs::gear_pose.y=0;
   inventory.slide_active=inventory.gear_slide_active=false;inventory.slide_remaining=0;
   inventory.pass=5;assert(hook.Root(m,inventory,layout,sp,layout+8)==layout+8);hook.scratch.End(m);assert(m.words==before);

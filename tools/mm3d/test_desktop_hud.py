@@ -82,13 +82,19 @@ class DesktopHudTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(),new)
             self.assertEqual(controls.read_bytes(),b'custom bindings')
 
-    def test_shared_android_desktop_hud_defaults_are_identical(self):
+    def test_shared_android_desktop_hud_assets_and_explicit_fork_overrides(self):
         root=Path(__file__).resolve().parents[2]
         resources=root/'resources/mm3d'
         assets=root/'src/android/app/src/main/assets'
         for name in ('layout.json','play.json'):
             self.assertEqual((resources/'desktop-hud'/name).read_bytes(),(assets/'dekui-hud8x'/name).read_bytes())
         values=json.loads((resources/'desktop-hud/layout.json').read_text())['presentation']
-        for file in (resources/'defaults/presentation.json',assets/'dekui/presentation.json'):
-            actual=json.loads(file.read_text())
-            self.assertEqual({k:actual[k] for k in values},values)
+        android=json.loads((assets/'dekui/presentation.json').read_text())
+        self.assertEqual({k:android[k] for k in values},values)
+        # Android fork defaults intentionally override these eight positions/scales.
+        fork=json.loads((resources/'defaults/presentation.json').read_text())
+        changed={k for k,v in values.items() if fork[k]!=v}
+        self.assertEqual(changed,{
+            'player_hud_buttons_scale','player_hud_magic_height',
+            'player_hud_magic_y','player_hud_minigame_x','player_hud_minigame_y',
+            'player_hud_minimap_scale','player_hud_rupees_scale','player_hud_rupees_x'})

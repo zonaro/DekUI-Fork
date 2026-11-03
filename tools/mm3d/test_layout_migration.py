@@ -12,15 +12,22 @@ class LayoutMigrationTests(unittest.TestCase):
     def setUp(self):
         self.policy=migration.policy(RESOURCES)
 
-    def apply(self, obj):
-        raw,held=migration.migrate((json.dumps(obj)+'\n').encode(),self.policy)
+    def apply(self, obj, revision=0):
+        raw,held=migration.migrate((json.dumps(obj)+'\n').encode(),self.policy,revision)
         return json.loads(raw),held
 
     def test_previous_defaults_upgrade_groups_preserve_hud(self):
         old=self.policy['previous'];new,held=self.apply(old)
         self.assertEqual(held,[])
         for k,v in self.policy['current'].items():
-            self.assertEqual(new[k],old[k] if k in self.policy['preserve_existing'] else v,k)
+            if k in self.policy.get('fresh_install_only', []) and k not in old:
+                self.assertNotIn(k, new)
+                continue
+            expected = old[k] if k in old and k in self.policy['preserve_existing'] else self.policy.get('existing_install_defaults', {}).get(k, v)
+            if k == 'magic_bar_height':
+                # Stock older layouts adopt the revised default; fork profiles keep theirs.
+                expected = v
+            self.assertEqual(new[k],expected,k)
 
     def test_reported_deck_case_preserves_all_nonlayout_preferences(self):
         old=json.loads((Path(__file__).parent/'fixtures/beta2-upgraded-deck.json').read_text())
@@ -28,7 +35,7 @@ class LayoutMigrationTests(unittest.TestCase):
         prefixes=tuple(p for group in migration.GROUPS.values() for p in group)
         for k,v in old.items():
             shipped_fades = k == 'fullscreen_draws' and v == self.policy.get('previous_fullscreen_draws')
-            self.assertEqual(new[k],self.policy['current'][k] if shipped_fades or (k.startswith(prefixes) and k in self.policy['current']) else v,k)
+            self.assertEqual(new[k],self.policy['current'][k] if shipped_fades or ((k.startswith(prefixes) or any(k in g for g in self.policy['legacy_dungeon_widgets'].values())) and k in self.policy['current']) else v,k)
         again,held=self.apply(new);self.assertEqual(again,new)
 
     def test_custom_group_is_not_partially_repositioned(self):
@@ -53,7 +60,7 @@ class LayoutMigrationTests(unittest.TestCase):
     def test_current_customizations_not_reset(self):
         old=dict(self.policy['current'],song_panel_left_x=-50,file_select_1_x=123,item_present_1_x=77,gear_6_x=42)
         new,held=self.apply(old);self.assertEqual(new,old)
-        self.assertEqual(set(held),set(migration.GROUPS))
+        self.assertEqual(set(held),{'songs','file_select','item_selection','gear_photo'})
 
     def test_fresh_and_current_are_idempotent(self):
         obj=self.policy['current'];new,held=self.apply(obj)
@@ -78,7 +85,7 @@ class LayoutMigrationTests(unittest.TestCase):
         prefixes=tuple(p for group in migration.GROUPS.values() for p in group)
         for k,v in self.policy['previous'].items():
             if self.policy['current'].get(k)!=v:
-                self.assertTrue(k.startswith(prefixes) or k in self.policy['preserve_existing'] or (k == 'fullscreen_draws' and v == self.policy.get('previous_fullscreen_draws')),k)
+                self.assertTrue(k.startswith(prefixes) or any(k in g for g in self.policy['legacy_dungeon_widgets'].values()) or k in self.policy['preserve_existing'] or (k == 'fullscreen_draws' and v == self.policy.get('previous_fullscreen_draws')),k)
 
     def test_shipped_fades_upgrade_but_custom_fades_remain(self):
         previous = self.policy['previous_fullscreen_draws']
@@ -97,7 +104,8 @@ class LayoutMigrationTests(unittest.TestCase):
         new, _ = self.apply(old)
         for key in ('damage_multiplier', 'actor_draw_distance', 'mask_present_1_x', 'mask_present_help_scale'):
             self.assertEqual(new[key], old[key])
-        self.assertEqual(new['mask_present_3_x'], self.policy['current']['mask_present_3_x'])
+        self.assertNotIn('mask_present_3_x', new)  # Keep customized mask layout together.
+        self.assertEqual(new['mask_present_6_x'], self.policy['current']['mask_present_6_x'])
         self.assertEqual(self.policy['current']['damage_multiplier'], 1)
         self.assertEqual(self.policy['current']['actor_draw_distance'], 1)
 

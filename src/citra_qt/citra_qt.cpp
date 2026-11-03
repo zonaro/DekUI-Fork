@@ -8,6 +8,8 @@
 #endif
 #ifdef ENABLE_MM3D_PRESENTATION
 #include "mm3d/player_settings.h"
+#include "mm3d/shader_cache_reset.h"
+#include "mm3d/translation.h"
 #include "mm3d/player_settings_bridge.h"
 #include "citra_qt/configuration/configure_input.h"
 #include <QScopedValueRollback>
@@ -1349,6 +1351,18 @@ void GMainWindow::ConnectWidgetEvents() {
         using namespace MM3D::PlayerSettings;
         ApplyPending(Settings::values, [&] { system.ApplySettings(); },
                      [&] { config->Save(); });
+        if(MM3D::Translation::import_requested.exchange(false)) {
+            const auto folder=QFileDialog::getExistingDirectory(this,tr("Import translation: select romfs folder"));
+            if(!folder.isEmpty()) {
+                const auto error=MM3D::Translation::Import(folder.toStdString(),
+                    FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir)+"mm3d-local/");
+                if(error.empty())
+                    QMessageBox::information(this,tr("Translation imported"),
+                        tr("Restart the game to use the translation. Messages changed by enabled DekUI features use English fallback; other text stays translated. You can disable the pack under Controls."));
+                else QMessageBox::warning(this,tr("Translation import failed"),QString::fromStdString(error));
+            }
+            render_window->setFocus();
+        }
         if(open_textures.exchange(false)) {
             const auto path=QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::LoadDir))+
                 QStringLiteral("textures/0004000000125500");
@@ -1882,6 +1896,23 @@ void GMainWindow::BootGame(const QString& filename) {
     u64 title_id{0};
     Loader::ResultStatus res =
         loader ? loader->ReadProgramId(title_id) : Loader::ResultStatus::Error;
+
+#ifdef ENABLE_MM3D_PRESENTATION
+    // BootGame has already joined/shut down the previous emulation session.
+    // Reset before system.Load creates a renderer or reads its disk caches.
+    if (res == Loader::ResultStatus::Success) {
+        const auto reset = MM3D::ShaderCacheReset::ApplyPending(
+            QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir)) + QStringLiteral("mm3d-local/"),
+            QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ShaderDir)), title_id, emu_thread != nullptr || system.IsPoweredOn());
+        if (!reset.error.isEmpty()) {
+            LOG_ERROR(Frontend, "Shader cache reset failed: {}", reset.error.toStdString());
+            QMessageBox::warning(this, tr("Shader cache reset"), reset.error +
+                tr("\n\nThe reset remains pending. The game will continue using any remaining cache files."));
+        } else if (reset.reset) {
+            LOG_INFO(Frontend, "Reset MM3D shader and pipeline caches before renderer startup");
+        }
+    }
+#endif
 
     if (Loader::ResultStatus::Success == res) {
         // Load per game settings

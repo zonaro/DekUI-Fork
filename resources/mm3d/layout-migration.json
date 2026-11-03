@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 4,
   "previous_revision": "60b7aa18d",
   "previous": {
     "single_screen_text": true,
@@ -576,6 +576,7 @@
   },
   "current": {
     "single_screen_text": true,
+    "stick_click_controls": true,
     "fix_bloom": true,
     "interpolation_60fps": true,
     "interpolation_cpu_vertices": true,
@@ -641,10 +642,10 @@
     "dungeon_map_1_y": 28.600000381469727,
     "dungeon_map_2_scale": 0.6499999761581421,
     "dungeon_map_2_x": 40.099998474121094,
-    "dungeon_map_2_y": 69.80000305175781,
+    "dungeon_map_2_y": 60.900001525878906,
     "dungeon_map_3_scale": 0.6200000047683716,
     "dungeon_map_3_x": 162.5,
-    "dungeon_map_3_y": 66.30000305175781,
+    "dungeon_map_3_y": 60.400001525878906,
     "dungeon_map_4_scale": 0.8500000238418579,
     "dungeon_map_4_x": 63,
     "dungeon_map_4_y": -168.39999389648438,
@@ -657,7 +658,7 @@
     "dungeon_map_7_scale": 0.25,
     "dungeon_map_7_x": 20,
     "dungeon_map_7_y": 1.899999976158142,
-    "dungeon_map_8_scale": 0.6000000238418579,
+    "dungeon_map_8_scale": 0.5899999737739563,
     "dungeon_map_8_x": 0,
     "dungeon_map_8_y": 0,
     "dungeon_map_9_scale": 0.10000000149011612,
@@ -962,7 +963,7 @@
     "magic_border_thickness": 1,
     "minimap": true,
     "minimap_bottom_margin": -7,
-    "minimap_opacity": 0.8500000238418579,
+    "minimap_opacity": 0.75,
     "minimap_right_margin": -17,
     "minimap_scale": 0.36000001430511475,
     "notebook_buttons_icon_scale": 0.8999999761581421,
@@ -1156,7 +1157,7 @@
     "player_hud_button_x_y": 0,
     "player_hud_button_y_x": 0,
     "player_hud_button_y_y": 0,
-    "player_hud_buttons_scale": 0,
+    "player_hud_buttons_scale": 1,
     "player_hud_buttons_x": 0,
     "player_hud_buttons_y": 20,
     "player_hud_carrots_scale": 0,
@@ -1176,16 +1177,17 @@
     "player_hud_hide_minimap": false,
     "player_hud_magic_scale": 0,
     "player_hud_magic_x": 0,
-    "player_hud_magic_y": 0,
+    "player_hud_magic_y": 4,
     "player_hud_minigame_scale": 0,
-    "player_hud_minigame_x": 0,
-    "player_hud_minigame_y": 0,
-    "player_hud_minimap_scale": 0,
+    "player_hud_minigame_x": 3,
+    "player_hud_minigame_y": 13,
+    "player_hud_minimap_scale": 2,
     "player_hud_minimap_x": 0,
     "player_hud_minimap_y": 0,
-    "player_hud_rupees_scale": 0,
-    "player_hud_rupees_x": 0,
+    "player_hud_rupees_scale": 1,
+    "player_hud_rupees_x": -3,
     "player_hud_rupees_y": 0,
+    "player_hud_base_scale": 2,
     "player_hud_scale": 0,
     "player_hud_top_padding": 0,
     "show_performance": false,
@@ -1198,7 +1200,7 @@
     "file_select_title_scale": 1,
     "file_select_title_x": 0,
     "file_select_title_y": 0,
-    "player_hud_magic_height": 0,
+    "player_hud_magic_height": -1,
     "player_hud_opacity": 1,
     "player_hud_timer_scale": 0,
     "player_hud_timer_x": 0,
@@ -1241,7 +1243,27 @@
     "cutscene_camera_fov": 49,
     "gear_6_x": 78.69999694824219,
     "gear_6_y": -20.600000381469727,
-    "gear_6_scale": 0.8799999952316284
+    "gear_6_scale": 0.8799999952316284,
+    "dungeon_map_arrow_down_x": 0,
+    "dungeon_map_arrow_down_y": 14.899999618530273,
+    "dungeon_map_arrow_left_x": -16.5,
+    "dungeon_map_arrow_left_y": 0,
+    "dungeon_map_arrow_right_x": 19.799999237060547,
+    "dungeon_map_arrow_right_y": 0,
+    "dungeon_map_arrow_up_x": 0,
+    "dungeon_map_arrow_up_y": -4,
+    "dungeon_map_arrows_scale": 0.7699999809265137,
+    "dungeon_map_prompts_icon_scale": 0.8999999761581421,
+    "dungeon_map_prompts_scale": 0.6899999976158142,
+    "dungeon_map_prompts_spacing": 15.100000381469727,
+    "dungeon_map_prompts_x": 0,
+    "dungeon_map_prompts_y": 0,
+    "hd_pictograph_photos": true,
+    "player_hud_layout_version": 2,
+    "player_hud_left_padding": 0,
+    "player_hud_magic_width": 1.0399999618530273,
+    "player_hud_mirror_item_buttons": true,
+    "player_hud_right_padding": 0
   },
   "legacy_fallbacks": {
     "song_banner_scale": 1,
@@ -1428,7 +1450,7 @@
   ],
   "profile_hashes": {
     "notebook.json": "2eec6780836b0a6ee2d8b413b98d64e6421269224973745a8ec70cc92eca0d40",
-    "presentation.json": "84d538ed010eae110d475e46449ba6ba78cae7dd8f2ff18f205baa513fee7809"
+    "presentation.json": "49523263c317b4c37b6d9783b5b75212c2bd29de76049c36ab1a2bdee384c1d6"
   },
   "retired_profiles": {
     "config/mm3d-local/title-screen/version.json": "b88f3593ac34151989590bd439405bced9d76f3ab73b5638f4362d0d26b5f65f",
@@ -1497,5 +1519,114 @@
       "vertices": 4,
       "width": 480
     }
-  ]
+  ],
+  "legacy_group_defaults": {
+    "mask_selection": [
+      {
+        "mask_present_1_scale": 0.5299999713897705,
+        "mask_present_1_x": -10.600000381469727,
+        "mask_present_1_y": 53.5,
+        "mask_present_3_scale": 0.6600000262260437,
+        "mask_present_3_x": -46.900001525878906,
+        "mask_present_3_y": -108.9000015258789,
+        "mask_present_4_scale": 1,
+        "mask_present_4_x": -512,
+        "mask_present_4_y": 435.6000061035156,
+        "mask_present_5_scale": 1,
+        "mask_present_5_x": 435.6000061035156,
+        "mask_present_5_y": 481.3999938964844,
+        "mask_present_help_scale": 0.800000011920929,
+        "mask_present_help_spacing": 0,
+        "mask_present_help_x": -5.699999809265137,
+        "mask_present_help_y": 210.60000610351562,
+        "mask_present_native": true
+      },
+      {
+        "mask_present_1_scale": 0.5299999713897705,
+        "mask_present_1_x": -8.899999618530273,
+        "mask_present_1_y": 53.5,
+        "mask_present_3_scale": 0.6000000238418579,
+        "mask_present_3_x": -36.79999923706055,
+        "mask_present_3_y": -93.5999984741211,
+        "mask_present_4_scale": 1,
+        "mask_present_4_x": -512,
+        "mask_present_4_y": 435.6000061035156,
+        "mask_present_5_scale": 1,
+        "mask_present_5_x": 435.6000061035156,
+        "mask_present_5_y": 481.3999938964844,
+        "mask_present_help_scale": 0.7200000286102295,
+        "mask_present_help_spacing": 0,
+        "mask_present_help_x": -5.699999809265137,
+        "mask_present_help_y": 210.60000610351562,
+        "mask_present_native": true
+      }
+    ],
+    "mask_description": [
+      {
+        "mask_present_6_x": 0,
+        "mask_present_6_y": -8.100000381469727,
+        "mask_present_6_scale": 0.7599999904632568
+      },
+      {
+        "mask_present_6_x": 0,
+        "mask_present_6_y": 0,
+        "mask_present_6_scale": 1
+      }
+    ]
+  },
+  "existing_install_defaults": {
+    "stick_click_controls": false,
+    "player_hud_base_scale": 0,
+    "player_hud_heart_spacing": 0,
+    "player_hud_hearts_scale": 0,
+    "player_hud_hearts_x": 0,
+    "player_hud_hearts_y": 0,
+    "player_hud_magic_height": 0,
+    "player_hud_magic_width": 1,
+    "player_hud_magic_y": 0,
+    "player_hud_buttons_scale": 0,
+    "player_hud_minimap_scale": 0,
+    "minimap_opacity": 0.8500000238418579,
+    "player_hud_rupees_scale": 0,
+    "player_hud_rupees_x": 0,
+    "player_hud_minigame_x": 0,
+    "player_hud_minigame_y": 0,
+    "player_hud_layout_version": 0,
+    "player_hud_mirror_item_buttons": false
+  },
+  "fresh_install_only": [
+    "dungeon_map_prompts_x",
+    "dungeon_map_prompts_y",
+    "dungeon_map_prompts_scale",
+    "dungeon_map_prompts_icon_scale",
+    "dungeon_map_prompts_spacing"
+  ],
+  "legacy_arrow_defaults": {
+    "dungeon_map_arrows_scale": 1,
+    "dungeon_map_arrow_up_x": 0,
+    "dungeon_map_arrow_up_y": 0,
+    "dungeon_map_arrow_down_x": 0,
+    "dungeon_map_arrow_down_y": 0,
+    "dungeon_map_arrow_left_x": 0,
+    "dungeon_map_arrow_left_y": 0,
+    "dungeon_map_arrow_right_x": 0,
+    "dungeon_map_arrow_right_y": 0
+  },
+  "legacy_dungeon_widgets": {
+    "dungeon_items": {
+      "dungeon_map_2_x": 40.099998474121094,
+      "dungeon_map_2_y": 69.80000305175781,
+      "dungeon_map_2_scale": 0.6499999761581421
+    },
+    "dungeon_floors": {
+      "dungeon_map_3_x": 162.5,
+      "dungeon_map_3_y": 66.30000305175781,
+      "dungeon_map_3_scale": 0.6200000047683716
+    },
+    "dungeon_description": {
+      "dungeon_map_8_x": 0,
+      "dungeon_map_8_y": 0,
+      "dungeon_map_8_scale": 0.6000000238418579
+    }
+  }
 }

@@ -109,6 +109,8 @@ upstream integration. The earlier platform playtests do not validate this update
 - Further interpolation optimizations and improvements.
 - Android support.
 
+---
+
 ## 1.0.0-beta.1 (2026-10-02)
 
 - Initial release.

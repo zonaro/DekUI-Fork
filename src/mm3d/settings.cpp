@@ -53,12 +53,34 @@ bool Settings::Load(const QString& path) {
         value("world_map_native_zoom_scale",1,.1f,3)};
     world_map_zoom_prompt={value("world_map_zoom_prompt_x",0,-400,400),value("world_map_zoom_prompt_y",0,-240,240),
         value("world_map_zoom_prompt_scale",.8f,.25f,2)};
+    dungeon_map_move_prompt={value("dungeon_map_move_prompt_x",0,-400,400),
+        value("dungeon_map_move_prompt_y",-44,-240,240),value("dungeon_map_move_prompt_scale",.69f,.25f,2)};
+    dungeon_map_zoom_prompt={value("dungeon_map_zoom_prompt_x",0,-400,400),
+        value("dungeon_map_zoom_prompt_y",-28,-240,240),value("dungeon_map_zoom_prompt_scale",.69f,.25f,2)};
+    // The old dungeon hints borrowed Notebook scale/icon scale and the
+    // difference between its two Y values. Notebook X never affected them.
+    // Fall back only for missing keys; saving makes the map values independent.
+    dungeon_map.prompts={true,value("dungeon_map_prompts_x",0,-400,400),
+        value("dungeon_map_prompts_y",0,-240,240),
+        value("dungeon_map_prompts_scale",notebook_live.prompt_scale,.5f,2),
+        value("dungeon_map_prompts_icon_scale",notebook_live.prompt_icon_scale,.5f,2),
+        value("dungeon_map_prompts_spacing",notebook_live.prompt_y-notebook_live.map_prompt_y,-480,480)};
+    // New global adjustments start neutral; retain every existing local pose.
+    dungeon_map.prompt_group={value("dungeon_map_buttons_x",0,-400,400),
+        value("dungeon_map_buttons_y",0,-240,240),value("dungeon_map_buttons_scale",1,.5f,2),
+        value("dungeon_map_buttons_icon_scale",1,.5f,2)};
     dungeon_map.enabled=object.value("dungeon_map_top").toBool(true);
     dungeon_map.side_panels=object.value("dungeon_map_side_panels").toBool(true);
     dungeon_map.top_strip=object.value("dungeon_map_top_strip").toBool(true);
     dungeon_map.top_panel={value("dungeon_map_top_panel_x",0,-1024,1024),value("dungeon_map_top_panel_y",0,-480,480),
         value("dungeon_map_top_panel_scale",.3125f,.1f,3)};
     dungeon_map.panel_darkness=value("dungeon_map_panel_darkness",0,0,1);
+    dungeon_map.arrow_scale=value("dungeon_map_arrows_scale",1,.1f,3);
+    for(unsigned i=0;i<4;++i) {
+        const auto key=QString("dungeon_map_arrow_%1_").arg(DungeonMap::ArrowNames[i]);
+        dungeon_map.arrow_offsets[i]={value((key+"x").toUtf8().constData(),0,-800,800),
+            value((key+"y").toUtf8().constData(),0,-480,480)};
+    }
     for(unsigned i=0;i<2;++i) {
         const auto key=QString("dungeon_map_panel_%1_").arg(i);const auto d=DungeonMap::Options{}.panels[i];
         dungeon_map.panels[i]={value((key+"x").toUtf8().constData(),d.x,-512,512),
@@ -285,6 +307,9 @@ bool Settings::Load(const QString& path) {
         b.y=value((prefix+"y").toUtf8().constData(),0.f,-240.f,240.f);
         b.scale=value((prefix+"scale").toUtf8().constData(),1.f,.25f,2.f);
     }
+    const int hud_layout_version=object.value("player_hud_layout_version").toInt(0);
+    player_hud.layout_version=hud_layout_version>=1&&hud_layout_version<=2?hud_layout_version:0;
+    player_hud.mirror_item_buttons=object.value("player_hud_mirror_item_buttons").toBool(false);
     player_hud.opacity=value("player_hud_opacity",1.f,0.f,1.f);
     player_hud.banner_darkness=value("player_hud_banner_darkness",0.f,0.f,1.f);
     player_hud.banner_y=int(value("player_hud_banner_y",0.f,-240.f,240.f));
@@ -298,9 +323,15 @@ bool Settings::Load(const QString& path) {
     player_hud.heart_spacing=int(value("player_hud_heart_spacing",0,
         -HudAdjustments::HeartSpacingLimit,HudAdjustments::HeartSpacingLimit));
     player_hud.magic_height_steps=int(value("player_hud_magic_height",0,-10,10));
+    player_hud.magic_width=value("player_hud_magic_width",1.f,.5f,3.f);
+    // Existing profiles already encode their chosen size in player_hud_scale.
+    // Do not apply the new-install baseline on top of it.
+    player_hud.base_scale=int(value("player_hud_base_scale",0,-10,10));
     player_hud.overall=int(value("player_hud_scale",0,-10,10));
-    player_hud.top=int(value("player_hud_top_padding",0,0,40));
-    player_hud.bottom=int(value("player_hud_bottom_padding",0,0,40));
+    player_hud.top=int(value("player_hud_top_padding",0,-HudAdjustments::VerticalPaddingLimit,HudAdjustments::VerticalPaddingLimit));
+    player_hud.bottom=int(value("player_hud_bottom_padding",0,-HudAdjustments::VerticalPaddingLimit,HudAdjustments::VerticalPaddingLimit));
+    player_hud.left=int(value("player_hud_left_padding",0,-HudAdjustments::SidePaddingLimit,HudAdjustments::SidePaddingLimit));
+    player_hud.right=int(value("player_hud_right_padding",0,-HudAdjustments::SidePaddingLimit,HudAdjustments::SidePaddingLimit));
     for(unsigned i=0;i<HudAdjustments::Count;++i) {
         const auto key=QString("player_hud_%1_scale").arg(HudAdjustments::Keys[i]).toUtf8();
         player_hud.elements[i]=int(value(key.constData(),0,-10,10));
@@ -308,7 +339,13 @@ bool Settings::Load(const QString& path) {
         player_hud.x[i]=int(value((prefix+"x").toUtf8().constData(),0,-400,400));
         player_hud.y[i]=int(value((prefix+"y").toUtf8().constData(),0,-240,240));
     }
-    accurate_hle_audio=object.value("accurate_hle_audio").toBool(true);
+    // One-time migration of every older audio preference to Balanced. Keep the
+    // stored mode IDs stable; the marker preserves later Accurate HLE choices.
+    const auto audio_mode=object.value("hle_audio_accuracy");
+    const int requested_mode=audio_mode.toInt(-1);
+    hle_audio_accuracy=object.value("hle_audio_mode_version")==QJsonValue(1) &&
+        audio_mode.isDouble() && audio_mode.toDouble()==requested_mode &&
+        requested_mode>=1 && requested_mode<=2?requested_mode:1;
     mute_music=object.value("mute_music").toBool(false);
     disable_low_health_beep=object.value("disable_low_health_beep").toBool(false);
     disable_heart_drops=object.value("disable_heart_drops").toBool(false);
@@ -334,10 +371,21 @@ bool Settings::Load(const QString& path) {
     walk_speed=value("walk_speed",1.f,.5f,3.f);
     climb_speed=value("climb_speed",1.f,.5f,3.f);
     swim_speed=value("swim_speed",1.f,.5f,3.f);
+    stick_click_controls = object.value("stick_click_controls").toBool(false);
     single_screen_text = object.value("single_screen_text").toBool(true);
     controller_neutral_item_prompts = object.value("controller_neutral_item_prompts").toBool(true);
     fix_bloom = object.value("fix_bloom").toBool(true);
     disable_fog = object.value("disable_fog").toBool(false);
+    hd_pictograph_photos = object.value("hd_pictograph_photos").toBool(true);
+    ambient_occlusion = AmbientOcclusion::Sanitize({
+        object.value("ambient_occlusion").toBool(false),
+        float(object.value("ambient_occlusion_strength").toDouble(.6)),
+        float(object.value("ambient_occlusion_radius").toDouble(40))});
+    depth_of_field = DepthOfField::Sanitize({
+        object.value("depth_of_field").toBool(false),
+        float(object.value("depth_of_field_focus").toDouble(600)),
+        float(object.value("depth_of_field_transition").toDouble(1200)),
+        float(object.value("depth_of_field_strength").toDouble(1.5))});
     interpolation_60fps = object.value("interpolation_60fps").toBool(true);
     interpolation_cpu_vertices = object.value("interpolation_cpu_vertices").toBool(true);
     red_potion_hearts = std::clamp(object.value("red_potion_hearts").toInt(20),1,20);
@@ -429,9 +477,13 @@ bool Settings::Save(const QString& path) const {
     if (save_blocked) return false;
     QSaveFile file(path); // atomic replacement; no direct-write fallback
     if (!file.open(QIODevice::WriteOnly)) return false;
-    QJsonObject object{{"version", 1}, {"accurate_hle_audio",accurate_hle_audio}, {"damage_multiplier",damage_multiplier}, {"disable_heart_drops",disable_heart_drops}, {"disable_rupee_drops",disable_rupee_drops}, {"disable_fairy_drops",disable_fairy_drops}, {"disable_magic_drops",disable_magic_drops}, {"disable_ammo_pickups",disable_ammo_pickups}, {"lose_rupees_on_death",lose_rupees_on_death}, {"world_ends_on_death",world_ends_on_death}, {"advance_six_hours_on_death",advance_six_hours_on_death}, {"fast_time",fast_time}, {"double_prices",double_prices}, {"price_multiplier",price_multiplier}, {"inventory_panel_x",inventory_menu.x}, {"inventory_panel_y",inventory_menu.y}, {"inventory_panel_scale",inventory_menu.scale}, {"dialogue_scale",dialogue_scale}, {"dialogue_y",dialogue_y}, {"dialogue_background_width",dialogue_background_width}, {"dialogue_indicator_x",dialogue_indicator_x}, {"dialogue_indicator_y",dialogue_indicator_y}, {"indicator", indicator}, {"show_performance", show_performance}, {"show_startup_settings_hint", show_startup_settings_hint},
+    QJsonObject object{{"version", 1}, {"accurate_hle_audio",hle_audio_accuracy==2}, {"hle_audio_accuracy",hle_audio_accuracy}, {"hle_audio_mode_version",1}, {"damage_multiplier",damage_multiplier}, {"disable_heart_drops",disable_heart_drops}, {"disable_rupee_drops",disable_rupee_drops}, {"disable_fairy_drops",disable_fairy_drops}, {"disable_magic_drops",disable_magic_drops}, {"disable_ammo_pickups",disable_ammo_pickups}, {"lose_rupees_on_death",lose_rupees_on_death}, {"world_ends_on_death",world_ends_on_death}, {"advance_six_hours_on_death",advance_six_hours_on_death}, {"fast_time",fast_time}, {"double_prices",double_prices}, {"price_multiplier",price_multiplier}, {"inventory_panel_x",inventory_menu.x}, {"inventory_panel_y",inventory_menu.y}, {"inventory_panel_scale",inventory_menu.scale}, {"dialogue_scale",dialogue_scale}, {"dialogue_y",dialogue_y}, {"dialogue_background_width",dialogue_background_width}, {"dialogue_indicator_x",dialogue_indicator_x}, {"dialogue_indicator_y",dialogue_indicator_y}, {"indicator", indicator}, {"show_performance", show_performance}, {"show_startup_settings_hint", show_startup_settings_hint},
         {"scale", scale}, {"android_menu_text_size",android_menu_text_size}, {"desktop_menu_text_size",desktop_menu_text_size}, {"opacity", opacity}, {"x", x}, {"y", y},
-        {"walk_speed",walk_speed},{"climb_speed",climb_speed},{"swim_speed",swim_speed}, {"single_screen_text", single_screen_text}, {"controller_neutral_item_prompts", controller_neutral_item_prompts}, {"fix_bloom", fix_bloom}, {"disable_fog", disable_fog}, {"interpolation_60fps", interpolation_60fps}, {"red_potion_hearts", red_potion_hearts}, {"blue_potion_hearts", blue_potion_hearts}, {"bottled_fairy_hearts", bottled_fairy_hearts}, {"widescreen", widescreen}, {"camera_zoom_out", camera_zoom_out}, {"game_camera_fov", game_camera_fov}, {"cutscene_camera_fov", cutscene_camera_fov}, {"camera_distance",camera_distance}, {"pak_link_model",pak_link_model}, {"twilight_link_model",twilight_link_model}, {"twilight_link_master_sword",twilight_link_master_sword}, {"adult_link_model",adult_link_model}, {"dark_link_model",dark_link_model}, {"adult_link_tunic_color",adult_link_tunic_color}, {"adult_link_master_sword",adult_link_master_sword}, {"restoration_hud_scale", restoration_hud_scale}, {"minigame_hud_x",minigame_hud.x},{"minigame_hud_y",minigame_hud.y},{"minigame_hud_scale",minigame_hud.scale},{"magic_shadow_enabled",magic_border.shadow_enabled},{"magic_shadow_size",magic_border.shadow_size},{"magic_shadow_opacity",magic_border.shadow_opacity},{"magic_border_enabled",magic_border.enabled},{"magic_border_thickness",magic_border.thickness},{"magic_border_r",magic_border.color[0]},{"magic_border_g",magic_border.color[1]},{"magic_border_b",magic_border.color[2]}, {"magic_bar_y", magic_bar_y}, {"magic_bar_height", magic_bar_height}, {"dpad_y", dpad_y},
+        {"walk_speed",walk_speed},{"climb_speed",climb_speed},{"swim_speed",swim_speed}, {"single_screen_text", single_screen_text}, {"stick_click_controls",stick_click_controls}, {"controller_neutral_item_prompts", controller_neutral_item_prompts}, {"fix_bloom", fix_bloom}, {"disable_fog", disable_fog},
+        {"hd_pictograph_photos",hd_pictograph_photos},
+        {"ambient_occlusion",ambient_occlusion.enabled}, {"ambient_occlusion_strength",ambient_occlusion.strength}, {"ambient_occlusion_radius",ambient_occlusion.radius},
+        {"depth_of_field",depth_of_field.enabled}, {"depth_of_field_focus",depth_of_field.focus}, {"depth_of_field_transition",depth_of_field.transition}, {"depth_of_field_strength",depth_of_field.strength},
+        {"interpolation_60fps", interpolation_60fps}, {"red_potion_hearts", red_potion_hearts}, {"blue_potion_hearts", blue_potion_hearts}, {"bottled_fairy_hearts", bottled_fairy_hearts}, {"widescreen", widescreen}, {"camera_zoom_out", camera_zoom_out}, {"game_camera_fov", game_camera_fov}, {"cutscene_camera_fov", cutscene_camera_fov}, {"camera_distance",camera_distance}, {"pak_link_model",pak_link_model}, {"twilight_link_model",twilight_link_model}, {"twilight_link_master_sword",twilight_link_master_sword}, {"adult_link_model",adult_link_model}, {"dark_link_model",dark_link_model}, {"adult_link_tunic_color",adult_link_tunic_color}, {"adult_link_master_sword",adult_link_master_sword}, {"restoration_hud_scale", restoration_hud_scale}, {"minigame_hud_x",minigame_hud.x},{"minigame_hud_y",minigame_hud.y},{"minigame_hud_scale",minigame_hud.scale},{"magic_shadow_enabled",magic_border.shadow_enabled},{"magic_shadow_size",magic_border.shadow_size},{"magic_shadow_opacity",magic_border.shadow_opacity},{"magic_border_enabled",magic_border.enabled},{"magic_border_thickness",magic_border.thickness},{"magic_border_r",magic_border.color[0]},{"magic_border_g",magic_border.color[1]},{"magic_border_b",magic_border.color[2]}, {"magic_bar_y", magic_bar_y}, {"magic_bar_height", magic_bar_height}, {"dpad_y", dpad_y},
         {"minimap", minimap}, {"minimap_scale", minimap_scale}, {"minimap_opacity", minimap_opacity},
         {"minimap_right_margin", minimap_right_margin}, {"minimap_bottom_margin", minimap_bottom_margin}};
     for(const auto& f:SubmenuHeader::Fields) object.insert(f.key,submenu_header.*f.member);
@@ -439,6 +491,8 @@ bool Settings::Save(const QString& path) const {
     object.insert("prop_draw_distance",ActorDrawDistance::Clamp(prop_draw_distance));
     object.insert("actor_draw_distance",ActorDrawDistance::Clamp(actor_draw_distance));
     object.insert("weaker_enhanced_defense",weaker_enhanced_defense);
+    object.insert("player_hud_layout_version",int(player_hud.layout_version));
+    object.insert("player_hud_mirror_item_buttons",player_hud.mirror_item_buttons);
     object.insert("player_hud_opacity",player_hud.opacity);
     object.insert("player_hud_banner_darkness",player_hud.banner_darkness);
     object.insert("player_hud_banner_y",player_hud.banner_y);
@@ -452,9 +506,13 @@ bool Settings::Save(const QString& path) const {
     object.insert("player_hud_hide_menu_prompts",player_hud.hide_menu_prompts);
     object.insert("player_hud_heart_spacing",player_hud.heart_spacing);
     object.insert("player_hud_magic_height",player_hud.magic_height_steps);
+    object.insert("player_hud_magic_width",player_hud.magic_width);
+    object.insert("player_hud_base_scale",player_hud.base_scale);
     object.insert("player_hud_scale",player_hud.overall);
     object.insert("player_hud_top_padding",player_hud.top);
     object.insert("player_hud_bottom_padding",player_hud.bottom);
+    object.insert("player_hud_left_padding",player_hud.left);
+    object.insert("player_hud_right_padding",player_hud.right);
     for(unsigned i=0;i<HudAdjustments::Count;++i) {
         const auto prefix=QString("player_hud_%1_").arg(HudAdjustments::Keys[i]);
         object.insert(prefix+"scale",player_hud.elements[i]);
@@ -492,9 +550,24 @@ bool Settings::Save(const QString& path) const {
     object.insert("world_map_native_zoom_x",world_map_native_zoom.x);
     object.insert("world_map_native_zoom_y",world_map_native_zoom.y);
     object.insert("world_map_native_zoom_scale",world_map_native_zoom.scale);
+    object.insert("dungeon_map_move_prompt_x",dungeon_map_move_prompt.x);
+    object.insert("dungeon_map_move_prompt_y",dungeon_map_move_prompt.y);
+    object.insert("dungeon_map_move_prompt_scale",dungeon_map_move_prompt.scale);
+    object.insert("dungeon_map_zoom_prompt_x",dungeon_map_zoom_prompt.x);
+    object.insert("dungeon_map_zoom_prompt_y",dungeon_map_zoom_prompt.y);
+    object.insert("dungeon_map_zoom_prompt_scale",dungeon_map_zoom_prompt.scale);
     object.insert("world_map_zoom_prompt_x",world_map_zoom_prompt.x);
     object.insert("world_map_zoom_prompt_y",world_map_zoom_prompt.y);
     object.insert("world_map_zoom_prompt_scale",world_map_zoom_prompt.scale);
+    object.insert("dungeon_map_prompts_x",dungeon_map.prompts.x);
+    object.insert("dungeon_map_prompts_y",dungeon_map.prompts.y);
+    object.insert("dungeon_map_prompts_scale",dungeon_map.prompts.scale);
+    object.insert("dungeon_map_prompts_icon_scale",dungeon_map.prompts.icon_scale);
+    object.insert("dungeon_map_prompts_spacing",dungeon_map.prompts.spacing);
+    object.insert("dungeon_map_buttons_x",dungeon_map.prompt_group.x);
+    object.insert("dungeon_map_buttons_y",dungeon_map.prompt_group.y);
+    object.insert("dungeon_map_buttons_scale",dungeon_map.prompt_group.scale);
+    object.insert("dungeon_map_buttons_icon_scale",dungeon_map.prompt_group.icon_scale);
     object.insert("dungeon_map_top",dungeon_map.enabled);
     object.insert("dungeon_map_side_panels",dungeon_map.side_panels);
     object.insert("dungeon_map_top_strip",dungeon_map.top_strip);
@@ -502,6 +575,12 @@ bool Settings::Save(const QString& path) const {
     object.insert("dungeon_map_top_panel_y",dungeon_map.top_panel.y);
     object.insert("dungeon_map_top_panel_scale",dungeon_map.top_panel.scale);
     object.insert("dungeon_map_panel_darkness",dungeon_map.panel_darkness);
+    object.insert("dungeon_map_arrows_scale",dungeon_map.arrow_scale);
+    for(unsigned i=0;i<4;++i) {
+        const auto key=QString("dungeon_map_arrow_%1_").arg(DungeonMap::ArrowNames[i]);
+        object.insert(key+"x",dungeon_map.arrow_offsets[i][0]);
+        object.insert(key+"y",dungeon_map.arrow_offsets[i][1]);
+    }
     for(unsigned i=0;i<2;++i) {
         const auto key=QString("dungeon_map_panel_%1_").arg(i);const auto p=dungeon_map.panels[i];
         object.insert(key+"x",p.x);object.insert(key+"y",p.y);object.insert(key+"scale",p.scale);

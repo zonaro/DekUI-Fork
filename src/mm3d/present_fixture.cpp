@@ -148,6 +148,14 @@ int main(int argc, char** argv) {
             window.UpdateCurrentFramebufferLayout(unsigned(960 * window.devicePixelRatio()), unsigned(540 * window.devicePixelRatio()));
             {
                 Vulkan::PresentWindow presentation(window, instance, scheduler, false, true);
+                // Reproduce two-image drivers even if this host's swapchain has
+                // more images. Keep excess render frames checked out until
+                // teardown, leaving one retained frame and one working frame.
+                // GetRenderFrame resets their fences, so never wait on these
+                // unused frames: no GPU work was submitted for them.
+                for (u32 spare = 2; spare < presentation.ImageCount(); ++spare)
+                    (void)presentation.GetRenderFrame();
+                std::cout << "Testing two usable presentation frames" << std::endl;
                 Vulkan::Frame* last_frame{};
                 for (unsigned i = 0; i < 180; ++i) {
                     window.PollEvents();
@@ -215,6 +223,9 @@ int main(int argc, char** argv) {
                     });
                     scheduler.Flush(frame->render_ready);
                     presentation.Present(frame);
+                    // A caller may wait without a subsequent draw or Finish.
+                    // Deferred diagnostic handoffs must reach the presenter too.
+                    if (i == 15) presentation.WaitPresent();
                     // Burst after the paced pairs to exercise in-flight frame
                     // reuse, then pause/read back the retained clean background.
                     // Never modifies the guest clock or frame limiter.

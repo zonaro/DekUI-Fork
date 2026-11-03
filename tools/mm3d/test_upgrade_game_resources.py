@@ -89,6 +89,62 @@ class ResourceUpgradeTests(unittest.TestCase):
         self.assertEqual((backup/'backup'/existing).read_bytes(), self.old['use.gmsg'])
         self.assertNotIn('resource_version', json.loads((backup/'backup'/upgrade.READY).read_bytes()))
 
+    def test_control_defaults_preserve_existing_installations(self):
+        defaults = json.loads((setup_game_folder.RESOURCES/'defaults/presentation.json').read_text())
+        self.assertTrue(defaults['stick_click_controls'])
+        self.assertTrue(defaults['player_hud_mirror_item_buttons'])
+        self.assertEqual(defaults['player_hud_base_scale'], 2)
+        self.assertEqual(defaults['player_hud_scale'], 0)
+        self.keep.pop(upgrade.layout_migration.CONFIG)
+        with self.builders():
+            for revision in range(upgrade.layout_migration.VERSION + 1):
+                for choice in (None, False, True):
+                    with self.subTest(revision=revision, choice=choice):
+                        original = dict(defaults, song_list_x=72.5, player_hud_scale=3,
+                                        player_hud_magic_width=1.7, notebook_buttons_scale=1.25,
+                                        notebook_buttons_icon_scale=.75)
+                        original.pop('player_hud_base_scale')
+                        original.pop('player_hud_layout_version')
+                        if choice is None:
+                            original.pop('stick_click_controls')
+                            original.pop('player_hud_mirror_item_buttons')
+                        else:
+                            original['stick_click_controls'] = choice
+                            original['player_hud_mirror_item_buttons'] = choice
+                        raw = (json.dumps(original, indent=2)+'\n').encode()
+                        self.put(upgrade.layout_migration.CONFIG, raw)
+                        ready = json.loads((self.user/upgrade.READY).read_bytes())
+                        ready['layout_version'] = revision
+                        self.put(upgrade.READY, json.dumps(ready).encode())
+                        self.run_upgrade()
+                        actual = json.loads((self.user/upgrade.layout_migration.CONFIG).read_bytes())
+                        for key, value in original.items():
+                            self.assertEqual(actual[key], value, key)
+                        # Current profiles can leave the key absent: the C++
+                        # loader uses false for old profiles without this key.
+                        self.assertEqual(actual.get('stick_click_controls', False), bool(choice))
+                        self.assertEqual(actual.get('player_hud_mirror_item_buttons', False), bool(choice))
+                        self.assertEqual(actual.get('player_hud_base_scale', 0), 0)
+                        self.assertEqual(actual.get('player_hud_layout_version', 0), 0)
+                        if revision == upgrade.layout_migration.VERSION:
+                            self.assertEqual((self.user/upgrade.layout_migration.CONFIG).read_bytes(), raw)
+                        before = self.snapshot()
+                        self.run_upgrade()
+                        self.assertEqual(before, self.snapshot())
+                        self.assert_kept()
+
+    def test_legacy_install_without_config_keeps_original_controls(self):
+        self.keep.pop(upgrade.layout_migration.CONFIG)
+        (self.user/upgrade.layout_migration.CONFIG).unlink()
+        with self.builders():
+            self.run_upgrade()
+            actual = json.loads((self.user/upgrade.layout_migration.CONFIG).read_bytes())
+            self.assertFalse(actual['stick_click_controls'])
+            before = self.snapshot()
+            self.run_upgrade()
+            self.assertEqual(before, self.snapshot())
+        self.assert_kept()
+
     def test_retired_sky_never_triggers_extraction(self):
         with self.builders() as (_, extract):
             self.run_upgrade()
@@ -270,6 +326,37 @@ class ResourceUpgradeTests(unittest.TestCase):
         with self.builders():self.run_upgrade()
         self.assertEqual(before,self.snapshot());self.assert_kept()
 
+    def test_version_one_install_upgrades_photo_without_rebuilding_resources(self):
+        # The photo defaults changed after layout version 1 had already shipped.
+        with self.builders() as (_, extract):
+            self.run_upgrade()
+            extract.reset_mock()
+            ready = json.loads((self.user/upgrade.READY).read_bytes())
+            ready['layout_version'] = 1
+            self.put(upgrade.READY, json.dumps(ready).encode())
+            original = json.loads((self.user/upgrade.layout_migration.CONFIG).read_bytes())
+            original.update(gear_6_x=0, gear_6_y=0, gear_6_scale=1)
+            raw = json.dumps(original).encode()
+            self.put(upgrade.layout_migration.CONFIG, raw)
+            self.run_upgrade()
+            actual = json.loads((self.user/upgrade.layout_migration.CONFIG).read_bytes())
+            defaults = json.loads((setup_game_folder.RESOURCES/'defaults/presentation.json').read_text())
+            expected = dict(original)
+            for key in ('gear_6_x', 'gear_6_y', 'gear_6_scale'):
+                expected[key] = defaults[key]
+            self.assertEqual(actual, expected)
+            self.assertEqual(extract.call_count, 0)
+            self.assertEqual(json.loads((self.user/upgrade.READY).read_bytes())['layout_version'],
+                             upgrade.layout_migration.VERSION)
+            backups = (self.user/'setup').glob('resource-upgrade-backup-*')
+            self.assertTrue(any((p/'backup'/upgrade.layout_migration.CONFIG).read_bytes() == raw
+                                for p in backups if (p/'backup'/upgrade.layout_migration.CONFIG).exists()))
+            before = self.snapshot()
+            self.run_upgrade()
+            self.assertEqual(before, self.snapshot())
+        self.keep.pop(upgrade.layout_migration.CONFIG)
+        self.assert_kept()
+
     def test_stock_profiles_retired_custom_profiles_preserved(self):
         policy=upgrade.layout_migration.policy(setup_game_folder.RESOURCES)
         stock='config/mm3d-local/hud/hearts.json';custom='config/mm3d-local/hud/loading.json'
@@ -281,6 +368,89 @@ class ResourceUpgradeTests(unittest.TestCase):
         backup,=(self.user/'setup').glob('resource-upgrade-backup-*')
         self.assertEqual((backup/'backup'/stock).read_bytes(),raw)
         self.assert_kept()
+
+    def test_existing_layout_revisions_upgrade_mask_and_hud_with_backup(self):
+        defaults = json.loads((setup_game_folder.RESOURCES/'defaults/presentation.json').read_text())
+        policy = upgrade.layout_migration.policy(setup_game_folder.RESOURCES)
+        with self.builders() as (_, extract):
+            self.run_upgrade()
+            for revision in (1, 2):
+                with self.subTest(revision=revision):
+                    ready = json.loads((self.user/upgrade.READY).read_bytes())
+                    ready['layout_version'] = revision
+                    self.put(upgrade.READY, json.dumps(ready).encode())
+                    original = dict(defaults, gear_6_x=0, gear_6_y=0, gear_6_scale=1,
+                                    mask_present_6_x=0,
+                                    mask_present_6_y=policy['previous']['dialogue_y'],
+                                    mask_present_6_scale=policy['previous']['dialogue_scale'],
+                                    magic_bar_height=policy['previous']['magic_bar_height'],
+                                    minimap_opacity=policy['previous']['minimap_opacity'],
+                                    mask_present_1_x=123, damage_multiplier=4,
+                                    stick_click_controls=True, song_list_x=72.5)
+                    raw = json.dumps(original).encode()
+                    self.put(upgrade.layout_migration.CONFIG, raw)
+                    extract.reset_mock()
+                    self.run_upgrade()
+                    actual = json.loads((self.user/upgrade.layout_migration.CONFIG).read_bytes())
+                    expected = dict(original)
+                    for key in ('gear_6_x', 'gear_6_y', 'gear_6_scale', 'mask_present_6_x',
+                                'mask_present_6_y', 'mask_present_6_scale',
+                                'magic_bar_height',):
+                        expected[key] = defaults[key]
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(extract.call_count, 0)
+                    self.assertEqual(json.loads((self.user/upgrade.READY).read_bytes())['layout_version'],
+                                     upgrade.layout_migration.VERSION)
+                    backups = (self.user/'setup').glob('resource-upgrade-backup-*')
+                    self.assertTrue(any((p/'backup'/upgrade.layout_migration.CONFIG).read_bytes() == raw
+                                        for p in backups if (p/'backup'/upgrade.layout_migration.CONFIG).exists()))
+                    before = self.snapshot()
+                    self.run_upgrade()
+                    self.assertEqual(before, self.snapshot())
+        self.keep.pop(upgrade.layout_migration.CONFIG)
+        self.assert_kept()
+
+    def test_revision_three_dungeon_upgrade_preserves_profile_and_backups(self):
+        policy=upgrade.layout_migration.policy(setup_game_folder.RESOURCES)
+        self.keep.pop(upgrade.layout_migration.CONFIG)
+        with self.builders() as (_,extract):
+            self.run_upgrade()
+            for mode in ('stock','custom','missing','current'):
+                ready=json.loads((self.user/upgrade.READY).read_bytes());ready['layout_version']=3
+                self.put(upgrade.READY,json.dumps(ready).encode())
+                original=dict(policy['current'], player_hud_heart_spacing=21,player_hud_scale=3,
+                              notebook_buttons_scale=1.7,notebook_prompt_y=13,notebook_map_prompt_y=-21,
+                              gear_6_x=0,gear_6_y=0,gear_6_scale=1)
+                for key in policy['fresh_install_only']:original.pop(key,None)
+                if mode!='current':
+                    original.update(policy['legacy_arrow_defaults'])
+                    for group in policy['legacy_dungeon_widgets'].values():original.update(group)
+                if mode=='custom':
+                    original['dungeon_map_arrow_up_y']=17
+                    original['dungeon_map_2_x']=75
+                    original['dungeon_map_3_scale']=.9
+                    original['dungeon_map_8_y']=9
+                if mode=='missing':
+                    for key in policy['legacy_arrow_defaults']:original.pop(key)
+                raw=(json.dumps(original,indent=2)+'\n').encode()
+                self.put(upgrade.layout_migration.CONFIG,raw);extract.reset_mock()
+                self.run_upgrade()
+                expected=dict(original)
+                if mode in ('stock','missing'):
+                    for key in policy['legacy_arrow_defaults']:expected[key]=policy['current'][key]
+                    for group in policy['legacy_dungeon_widgets'].values():
+                        for key in group:expected[key]=policy['current'][key]
+                actual=(self.user/upgrade.layout_migration.CONFIG).read_bytes()
+                self.assertEqual(json.loads(actual),expected)
+                if mode in ('custom','current'):self.assertEqual(actual,raw)
+                else:
+                    backups=(self.user/'setup').glob('resource-upgrade-backup-*')
+                    self.assertTrue(any((p/'backup'/upgrade.layout_migration.CONFIG).read_bytes()==raw
+                                        for p in backups if (p/'backup'/upgrade.layout_migration.CONFIG).is_file()))
+                self.assertEqual(extract.call_count,0)
+                self.assertEqual(json.loads((self.user/upgrade.READY).read_bytes())['layout_version'],4)
+                before=self.snapshot();self.run_upgrade();self.assertEqual(before,self.snapshot())
+                self.assert_kept()
 
     def test_bad_config_or_future_migration_changes_nothing(self):
         for key in ('layout_version',):

@@ -44,6 +44,7 @@ private:
     vk::Image depth_image{};
     vk::DeviceMemory depth_memory{};
     vk::ImageView depth_view{};
+    vk::ImageView depth_sample_view{};
     bool with_depth{};
     unsigned width{}, height{};
     bool visible{};

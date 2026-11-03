@@ -128,6 +128,7 @@ struct Hook {
         if(!Pointer(notebook_owner,0x5c))return;
         auto map=m.Read(notebook_owner+0x54),state=m.Read(notebook_owner+0x4c),player=m.Read(notebook_owner+0x58);
         if(!map||!state||!player||!LayoutNamed(m,*map,"UpEventMap"))return;
+        if(!Pointer(*player,0xc))return;
         auto playing=m.Read(*player+8);if(!playing)return;
         if(*state==255&&!(*playing&255))return;
         auto list=m.Read(*map+8+0x14),count=m.Read(*map+8+0x18);

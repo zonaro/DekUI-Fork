@@ -4,11 +4,13 @@
 #include <atomic>
 #include <vector>
 #include "mm3d/single_screen_text_data.h"
+#include "mm3d/stick_controls.h"
 #include "mm3d/single_screen_localized_data.h"
 #include "mm3d/classic_owl_text_data.h"
 #include "mm3d/classic_saving.h"
 #include "mm3d/classic_owl_return_text.h"
 #include "mm3d/classic_localized_text.h"
+#include "mm3d/translation.h"
 
 namespace MM3D::SingleScreenText {
 inline std::atomic_bool enabled{true};
@@ -26,6 +28,13 @@ template<class M> bool CodeMatches(M& m) {
 }
 inline bool Pointer(U32 p,U32 n=4){return p>=0x100000&&n<=0x1000000&&p<=0x40000000-n;}
 template<class M> bool Apply(M& m,U32 self,U32 id) {
+    if (Translation::Owns(m, self)) {
+        if (id == 0xc01)
+            return Translation::Apply(m, self, id, Translation::Kind::Owl,
+                ClassicSaving::resume_text_active.load() ? 2 : ClassicSaving::enabled.load() ? 1 : 0);
+        return Translation::Apply(m, self, id, Translation::Kind::Controls,
+            enabled.load() ? (StickControls::enabled.load() ? 2 : 1) : 0);
+    }
     bool active=enabled.load();
     bool return_notice=false;
     const Replacement* screen_replacement=nullptr;

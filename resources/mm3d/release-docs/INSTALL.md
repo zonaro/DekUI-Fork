@@ -63,6 +63,8 @@ Hold ZR and press SELECT during gameplay to toggle the minimap. In-game cheats r
 3. Copy your existing `user` folder and game file beside the new application.
 4. Launch the new version.
 
-Saves, HUD settings, graphics preferences, custom textures, and unrelated mods are preserved. On first launch, recognized older menu layouts update automatically with backups; customized layouts are kept. To restore the current Songs, file-select, and item-selection layouts manually, use **General → Reset menu layouts**. Keep the app with its bundled `tools`, `resources`, and any runtime folders.
+Saves, custom HUD settings, graphics preferences, custom textures, and unrelated mods are preserved, except for the one-time audio migration to Balanced described above. On first launch, recognized older menu layouts update automatically with backups; customized layouts are kept. This includes the Gear Pictograph and Moon mask-selection positions. Old stock magic-bar height and minimap opacity values also receive the updated defaults; custom values are preserved.
+
+To restore the current Songs, file-select, item-selection, Moon mask-selection, and Gear Pictograph layouts manually, use **General → Reset menu layouts**. This action backs up the previous settings and keeps gameplay, controls, and HUD preferences. Keep the app with its bundled `tools`, `resources`, and any runtime folders.
 
 If the upgrade fails or is interrupted, the game will not open; relaunch to retry. Resource backups are retained under `user/setup/resource-upgrade-backup-*` after success, or `user/setup/resource-upgrade-pending/backup` while an upgrade is pending. Do not delete your `user` folder or these backups to troubleshoot.

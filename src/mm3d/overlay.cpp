@@ -28,6 +28,7 @@
 #endif
 #include "mm3d/diagnostics.h"
 #include "mm3d/layout_reset.h"
+#include "mm3d/shader_cache_reset.h"
 #include "mm3d/classic_saving.h"
 #include "mm3d/classic_double_time.h"
 #include "mm3d/audio_capture.h"
@@ -44,6 +45,7 @@
 #include "mm3d/fast_time.h"
 #include "mm3d/prices.h"
 #include "mm3d/single_screen_text.h"
+#include "mm3d/stick_controls.h"
 #include "mm3d/movement_speed.h"
 #include "mm3d/notebook.h"
 #include "mm3d/notebook_inspector.h"
@@ -83,6 +85,7 @@
 #include "mm3d/owl_sword.h"
 #include "mm3d/owl_intro.h"
 #include "mm3d/simple_cheats.h"
+#include "mm3d/photo_capture.h"
 #include "mm3d/bomber_approach.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include <imgui.h>
@@ -126,7 +129,7 @@ void ApplyPresentationSettings(const Settings& settings) {
     PlayerHud::ApplyCarrots(settings.carrots);
     PlayerHud::ApplyDpadPosition(settings.dpad_offset_x,settings.dpad_offset_y);
     PlayerHud::ApplyMagicHeight(settings.magic_bar_height);
-    AudioCore::HLE::accurate_audio.store(settings.accurate_hle_audio);
+    AudioCore::HLE::accuracy_mode.store(static_cast<AudioCore::HLE::AccuracyMode>(settings.hle_audio_accuracy));
     Music::muted.store(settings.mute_music);
     Music::disable_low_health_beep.store(settings.disable_low_health_beep);
     TatlReminders::disabled.store(settings.disable_tatl_reminders);
@@ -135,8 +138,11 @@ void ApplyPresentationSettings(const Settings& settings) {
     MovementSpeed::swim.store(settings.swim_speed);
     SingleScreenText::enabled.store(settings.single_screen_text);
     SingleScreenText::neutral_enabled.store(settings.controller_neutral_item_prompts);
+    StickControls::Configure(settings.stick_click_controls);
     BloomSampling::enabled.store(settings.fix_bloom);
     Fog::disabled.store(settings.disable_fog);
+    DepthOfField::Apply(settings.depth_of_field);
+    AmbientOcclusion::Apply(settings.ambient_occlusion);
     ClassicSaving::enabled.store(settings.classic_saving);
     ClassicDoubleTime::enabled.store(settings.classic_double_time);
     OwlSword::enabled.store(settings.sword_activate_owls);
@@ -577,6 +583,8 @@ Overlay::Overlay(const Vulkan::Instance& instance, vk::Format format, unsigned i
 #endif
     }
     HudAdjustments::minimap_visibility_request.store(-1);
+    PhotoCapture::enabled.store(state.settings.hd_pictograph_photos);
+    PhotoCapture::layout.store(0);
     ApplyPresentationSettings(state.settings);
     const auto inventory_restore=InventoryMenu::RestoreLegacy();
     if(!inventory_restore.isEmpty()) state.status=inventory_restore;
@@ -836,11 +844,13 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
 #endif
         };
         const auto audio_accuracy_controls=[&]() {
-            if(AndroidMenuStyle::Checkbox("Accurate HLE audio",&state.settings.accurate_hle_audio)) {
-                AudioCore::HLE::accurate_audio.store(state.settings.accurate_hle_audio);
+            int audio_mode=state.settings.hle_audio_accuracy==2?1:0;
+            if(AndroidMenuStyle::Combo("Audio mode",&audio_mode,"Balanced\0Accurate HLE\0")) {
+                state.settings.hle_audio_accuracy=audio_mode+1;
+                AudioCore::HLE::accuracy_mode.store(static_cast<AudioCore::HLE::AccuracyMode>(state.settings.hle_audio_accuracy));
                 state.status=state.settings.Save(state.directory+"presentation.json")?"Audio settings saved":"Audio settings save FAILED";
             }
-            hover_help("Corrects rupee sounds, audio may sound more muffled but is closer to how it sounds on 3DS");
+            hover_help("Balanced corrects rupee audio; Accurate HLE applies accurate decoding and resampling to all audio.");
             if(AndroidMenuStyle::Checkbox("Mute music",&state.settings.mute_music)) {
                 Music::muted.store(state.settings.mute_music);
                 state.status=state.settings.Save(state.directory+"presentation.json")?"Audio settings saved":"Audio settings save FAILED";
@@ -874,6 +884,50 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             }
             hover_help("Removes distance fog. As fog is used for atmospheric effect, it is not recommended to disable it.");
         };
+        const auto photo_control = [&]() {
+            if(ImGui::Checkbox("HD Pictograph photos (restart required)",&state.settings.hd_pictograph_photos)) {
+                state.status=state.settings.Save(state.directory+"presentation.json")?
+                    "Photo setting saved. Restart the game to apply.":"Photo setting save FAILED";
+            }
+        };
+#if !defined(ENABLE_MM3D_GAME_FOLDER) && !defined(__ANDROID__)
+        const auto depth_of_field_control = [&]() {
+            auto& o=state.settings.depth_of_field;
+            bool changed=ImGui::Checkbox("Depth of field",&o.enabled);
+            hover_help("Softens distant scenery while keeping nearby objects and the HUD sharp. Requires Vulkan. May reduce performance, especially at high resolutions.");
+            if(o.enabled) {
+                changed|=ImGui::SliderFloat("Focus distance",&o.focus,50.f,4000.f,"%.0f");
+                hover_help("Objects closer than this distance stay sharp. Larger values keep more of the scene in focus.");
+                changed|=ImGui::SliderFloat("Focus transition",&o.transition,100.f,6000.f,"%.0f");
+                hover_help("Distance over which the background gradually reaches full blur.");
+                changed|=ImGui::SliderFloat("Blur strength",&o.strength,0.f,4.f,"%.2f");
+                if(ImGui::Button("Reset depth of field")){o=DepthOfField::Options{};o.enabled=true;changed=true;}
+            }
+            if(changed) {
+                DepthOfField::Apply(o);
+                state.status=state.settings.Save(state.directory+"presentation.json")?
+                    "Graphics settings saved":"Graphics settings save FAILED";
+                if(inspection_paused.load())step_requested.store(true);
+            }
+        };
+        const auto ambient_occlusion_control = [&]() {
+            auto& o=state.settings.ambient_occlusion;
+            bool changed=ImGui::Checkbox("Ambient occlusion",&o.enabled);
+            hover_help("Adds soft contact shading where visible surfaces meet. Requires Vulkan. May reduce performance; screen-space shading can change near screen edges.");
+            if(o.enabled) {
+                changed|=ImGui::SliderFloat("Occlusion strength",&o.strength,0.f,1.5f,"%.2f");
+                changed|=ImGui::SliderFloat("Occlusion radius",&o.radius,5.f,150.f,"%.0f");
+                hover_help("Size of the area around a surface that contributes contact shading.");
+                if(ImGui::Button("Reset ambient occlusion")){o=AmbientOcclusion::Options{};o.enabled=true;changed=true;}
+            }
+            if(changed) {
+                AmbientOcclusion::Apply(o);
+                state.status=state.settings.Save(state.directory+"presentation.json")?
+                    "Graphics settings saved":"Graphics settings save FAILED";
+                if(inspection_paused.load())step_requested.store(true);
+            }
+        };
+#endif
         const auto bloom_control = [&]() {
             if (AndroidMenuStyle::Checkbox("Fix bloom", &state.settings.fix_bloom)) {
                 BloomSampling::enabled.store(state.settings.fix_bloom);
@@ -927,7 +981,14 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
         const auto hud_controls=[&]() {
             auto& hud=state.settings.player_hud;
             bool changed=false;
-            const auto scale_control=[&](const char* label,int& steps) {
+            const auto defaults=HudAdjustments::UiDefaults(hud,PlayerOverlay());
+            const auto int_control=[&](const char* label,int& value,int low,int high,int base) {
+                int displayed=value-base;
+                if(ImGui::SliderInt(label,&displayed,low-base,high-base,"%+d",ImGuiSliderFlags_AlwaysClamp)) {
+                    value=displayed+base;changed=true;
+                }
+            };
+            const auto scale_control=[&](const char* label,int& steps,int base=0) {
                 ImGui::PushID(label);
                 changed|=AndroidMenuStyle::SliderInt(label,&steps,-10,10,"%+d",ImGuiSliderFlags_AlwaysClamp);
                 help_text("0 is the default size. Each step changes size by 5%. Overall and individual adjustments combine.");
@@ -944,7 +1005,13 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                 if(ImGui::Button("Reset")){value=fallback;changed=true;}
                 ImGui::PopID();
             };
-            scale_control("Overall HUD scale",hud.overall);
+            changed|=ImGui::Checkbox("Mirror item button backgrounds",&hud.mirror_item_buttons);
+            hover_help("Mirrors the lower half of the X/Y/I/II backgrounds to hide the original B lettering. A and B stay unchanged.\n\nNOTE: May not look good with texture packs since button textures may not be vertically symmetrical.");
+            if(PlayerOverlay())scale_control("Overall HUD scale",hud.overall);
+            else {
+                scale_control("Base HUD scale",hud.base_scale);
+                ImGui::TextWrapped("Defines the size at F2 scale 0. F2 changes a separate relative adjustment.");
+            }
             percent_control("Overall HUD opacity",hud.opacity,1.f,"Adjusts all gameplay HUD elements, including the minimap. Combines with minimap opacity and the game's own fades.");
             if(!PlayerOverlay()) {
                 changed|=AndroidMenuStyle::Checkbox("Hide minimap",&hud.hide_minimap);
@@ -964,7 +1031,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                     for(unsigned i=0;i<HudAdjustments::Count;++i) {
                         ImGui::PushID(int(i));
                         if(ImGui::TreeNode(HudAdjustments::Labels[i])) {
-                            scale_control("Scale",hud.elements[i]);
+                            scale_control("Scale",hud.elements[i],defaults.elements[i]);
                             if(i==HudAdjustments::Hearts) {
                                 changed|=AndroidMenuStyle::SliderInt("Heart spacing",&hud.heart_spacing,
                                     -HudAdjustments::HeartSpacingLimit,HudAdjustments::HeartSpacingLimit,
@@ -974,7 +1041,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                                 if(ImGui::Button("Reset heart spacing")){hud.heart_spacing=0;changed=true;}
                             }
                             if(i==HudAdjustments::Minimap)
-                                percent_control("Opacity",state.settings.minimap_opacity,.85f,"Controls minimap transparency. Combines with overall HUD opacity.");
+                                percent_control("Opacity",state.settings.minimap_opacity,HudAdjustments::DefaultMinimapOpacity(hud),"Controls minimap transparency. Combines with overall HUD opacity.");
                             if(i==HudAdjustments::Magic) {
                                 changed|=AndroidMenuStyle::SliderInt("Height",&hud.magic_height_steps,-10,10,"%+d",ImGuiSliderFlags_AlwaysClamp);
                                 help_text("Changes height live while keeping the top edge fixed. Each step is 5% of the default height; width stays unchanged.");
@@ -987,9 +1054,9 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                             AndroidMenuStyle::AfterControl();
                             if(ImGui::Button("Reset element")){hud.elements[i]=0;hud.x[i]=0;hud.y[i]=0;
                                 if(i==HudAdjustments::Buttons){hud.button_x={};hud.button_y={};}
-                                if(i==HudAdjustments::Hearts)hud.heart_spacing=0;
-                                if(i==HudAdjustments::Magic)hud.magic_height_steps=0;
-                                if(i==HudAdjustments::Minimap)state.settings.minimap_opacity=.85f;changed=true;}
+                                if(i==HudAdjustments::Hearts)hud.heart_spacing=defaults.heart_spacing;
+                                if(i==HudAdjustments::Magic){hud.magic_height_steps=defaults.magic_height_steps;hud.magic_width=defaults.magic_width;}
+                                if(i==HudAdjustments::Minimap)state.settings.minimap_opacity=HudAdjustments::DefaultMinimapOpacity(hud);changed=true;}
                             if(i==HudAdjustments::Buttons) {
                                 for(unsigned b=0;b<6;++b)if(ImGui::TreeNode(HudAdjustments::ButtonLabels[b])) {
                                     changed|=AndroidMenuStyle::SliderInt("X position",&hud.button_x[b],-400,400,"%+d",ImGuiSliderFlags_AlwaysClamp);
@@ -1016,7 +1083,8 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                 ImGui::EndTabBar();
             }
             ImGui::Separator();
-            if(ImGui::Button("Reset all HUD settings")){const bool hide_prompts=hud.hide_menu_prompts;hud={};hud.hide_menu_prompts=hide_prompts;state.settings.minimap_opacity=.85f;changed=true;}
+            if(ImGui::Button("Reset all HUD settings")){HudAdjustments::ResetPlayer(hud);state.settings.minimap_opacity=HudAdjustments::DefaultMinimapOpacity(hud);changed=true;}
+            hover_help("Restores the latest default HUD layout, including size, spacing and positions. Map and Notebook layouts are unchanged.");
             if(changed) {
                 HudAdjustments::Apply(hud);
                 Minimap::opacity.store(state.settings.minimap_opacity);
@@ -1024,6 +1092,11 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             }
         };
         const auto text_controls=[&]() {
+            if(AndroidMenuStyle::Checkbox("Stick-click item controls",&state.settings.stick_click_controls)) {
+                StickControls::Configure(state.settings.stick_click_controls);
+                state.status=state.settings.Save(state.directory+"presentation.json")?"Controls saved":"Controls save FAILED";
+            }
+            help_text("Use ZL/ZR for item slots and stick clicks for camera and minimap. Existing button layouts remain available.");
             if(AndroidMenuStyle::Checkbox("Hide item menu button prompts",&state.settings.player_hud.hide_menu_prompts)) {
                 HudAdjustments::hide_menu_prompts.store(state.settings.player_hud.hide_menu_prompts);
                 state.status=state.settings.Save(state.directory+"presentation.json")?"Controls saved":"Controls save FAILED";
@@ -1041,6 +1114,19 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             help_text("Uses neutral actions instead of exact button names in English item prompts and tutorials. Applies when a message is next opened.");
         };
         const auto general_controls=[&]() {
+            static QString shader_reset_error;
+            if(ImGui::Button("Reset shader cache (restart required)")) {
+                const auto error=ShaderCacheReset::Request(state.directory);
+                shader_reset_error=error;
+                state.status=error.isEmpty()?"Shader cache reset scheduled. Close and reopen Dekui to apply.":error;
+            }
+            hover_help("Clears this game's shader and pipeline caches on the next launch. Shaders will rebuild as you play, which may temporarily increase stuttering. Saves, settings and texture packs are kept.");
+            if(!shader_reset_error.isEmpty())
+                ImGui::TextWrapped("%s",shader_reset_error.toUtf8().constData());
+            else if(ShaderCacheReset::Pending(state.directory))
+                ImGui::TextWrapped("Shader cache reset scheduled. Close and reopen Dekui to apply.");
+            else if(ShaderCacheReset::completed.load())
+                ImGui::TextWrapped("Shader cache reset complete. Shaders will rebuild as you play.");
 #ifdef ENABLE_MM3D_GAME_FOLDER
             static QString menu_reset_status;
             if(ImGui::Button("Reset menu layouts")) {
@@ -1052,7 +1138,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                     menu_reset_status="Menu layouts reset. Previous settings backed up.";
                 } else menu_reset_status="Could not reload reset settings. Restart Majora ReMasked.";
             }
-            hover_help("Restores the Songs, file-select and item-selection layouts to this release's defaults. Keeps gameplay settings, controls and HUD preferences. Backs up your previous settings.");
+            hover_help("Restores the Songs, file-select, item-selection, mask-selection and Gear photo layouts to this release's defaults. Keeps gameplay settings, controls and HUD preferences. Backs up your previous settings.");
             if(!menu_reset_status.isEmpty())ImGui::TextWrapped("%s",menu_reset_status.toUtf8().constData());
 #endif
             startup_hint_control();
@@ -1164,9 +1250,19 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             for(unsigned i=0;i<Count;++i) {
                 if(i==0)ImGui::SeparatorText("Health, magic and rupees");
                 if(i==Masks)ImGui::SeparatorText("Inventory and gear");
+                if(i==DungeonKeys)ImGui::SeparatorText("Dungeon inventory");
+                const bool current_dungeon=i==RemoveDungeonMap||i==RemoveDungeonCompass;
+                ImGui::BeginDisabled(current_dungeon&&!dungeon_ready.load());
                 if(ImGui::Button(Labels[i]))Queue(Action(i));
+                ImGui::EndDisabled();
                 hover_help(Help[i]);
             }
+            ImGui::EndDisabled();
+            ImGui::SeparatorText("Movement");
+            bool moon=moon_jump.load();
+            ImGui::BeginDisabled(!available&&!moon);
+            if(ImGui::Checkbox("Moon jump (hold L + A)",&moon))moon_jump=moon;
+            hover_help("Hold L + A to rise; release to fall normally. Session only. Inactive during pause, locked actions and cutscenes.");
             ImGui::EndDisabled();
             ImGui::SeparatorText("Infinite resources");
             for(unsigned i=0;i<9;++i) {
@@ -1186,6 +1282,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             if(pending.load())ImGui::TextUnformatted("Queued — resume the game to apply.");
             else if(result.load()==1)ImGui::TextUnformatted("Cheat applied.");
             else if(result.load()==-1)ImGui::TextUnformatted("Not applied: load a supported game save first.");
+            else if(result.load()==-2)ImGui::TextUnformatted("Not applied: enter a temple first.");
         };
         const auto restoration_controls=[&] {
             if(AndroidMenuStyle::Checkbox("Bombers don't approach automatically",&state.settings.disable_bomber_approach)) {
@@ -1224,8 +1321,6 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             hover_help("Turns off every option in this tab.");
             const auto saving_status=ClassicSaving::Status();
             if(!saving_status.empty())ImGui::TextWrapped("%s",saving_status.c_str());
-            ImGui::Separator();
-            ImGui::TextWrapped("These features are experimental. A full playthrough with them is needed to verify completely that they don't cause crashes/lock-ups.");
         };
         const auto actor_distance_control=[&] {
             if(AndroidMenuStyle::SliderFloat("Enemy / NPC draw distance",&state.settings.actor_draw_distance,1.f,3.f,"%.2fx",ImGuiSliderFlags_AlwaysClamp)) {
@@ -1347,6 +1442,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                 if(AndroidMenuStyle::SliderInt("Internal resolution",&factor,1,9,"%dx"))set_resolution.store(factor);
                 bloom_control();
                 fog_control();
+                photo_control();
                 bool sync=vsync.load()!=0;
                 if(AndroidMenuStyle::Checkbox("VSync",&sync))set_vsync.store(sync);
                 bool disk=cache.load()!=0;
@@ -1529,7 +1625,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
         else {
         if(ImGui::BeginTabBar("Editor settings")) {
         if(ImGui::BeginTabItem("General")){general_controls();ImGui::EndTabItem();}
-        if(ImGui::BeginTabItem("Graphics")){interpolation_control();actor_distance_control();fog_control();ImGui::EndTabItem();}
+        if(ImGui::BeginTabItem("Graphics")){interpolation_control();actor_distance_control();fog_control();photo_control();depth_of_field_control();ambient_occlusion_control();ImGui::EndTabItem();}
         if(ImGui::BeginTabItem("Camera")) {
         if(ImGui::CollapsingHeader("Live game camera")) {
             bool inspect=CameraLive::enabled.load();
@@ -1892,12 +1988,12 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                 changed|=ImGui::SliderFloat("Diamond rotation",&o.diamond.rotation,-180,180,"%.1f degrees");
                 ImGui::TextWrapped("Spacing 0 stacks all four at the center. Button size is independent. Turn diamond off to restore individual positions.");
             }
-            constexpr const char* names[]{"A button","X button","Y button","B button","Item I (ZR + X)","Item II (ZR + Y)"};
+            const char* names[]{"A button","X button","Y button","B button",state.settings.stick_click_controls?"Item I (ZL)":"Item I (ZR + X)",state.settings.stick_click_controls?"Item II (ZR)":"Item II (ZR + Y)"};
             for(unsigned i=0;i<HudButtons::Count;++i){if(o.diamond.enabled&&i!=0&&i!=3)continue;ImGui::PushID(int(i)+2300);
-                if(ImGui::TreeNode(names[i])){auto& p=o.buttons[i];
+                if(ImGui::TreeNode(names[i])){const auto slot=StickControls::ItemLayoutIndex(i,4);auto& p=o.buttons[slot];
                     changed|=ImGui::SliderFloat("X offset",&p.x,-512,512,"%.1f");
                     changed|=ImGui::SliderFloat("Y offset",&p.y,-240,240,"%.1f");
-                    if(ImGui::Button("Reset button")){p=HudButtons::Default()[i];changed=true;}
+                    if(ImGui::Button("Reset button")){p=HudButtons::Default()[slot];changed=true;}
                     ImGui::TreePop();}ImGui::PopID();}
             for(unsigned i=0;i<3;++i){ImGui::PushID(int(i)+2400);
                 ImGui::Text("Layout %u%s",i+1,o.saved[i]?"":" (empty)");ImGui::SameLine();
@@ -2163,7 +2259,30 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                 changed|=ImGui::SliderFloat("Y",&p.y,-240,240,"%.1f",ImGuiSliderFlags_AlwaysClamp);
                 changed|=ImGui::SliderFloat("Scale",&p.scale,.25f,2,"%.2fx",ImGuiSliderFlags_AlwaysClamp);
                 if(ImGui::Button("Reset")){p={0,0,.8f};changed=true;}
-                ImGui::TextWrapped("Switches between Zoom In and Zoom Out with the map. Uses shared menu prompt opacity.");
+                ImGui::TextWrapped("Switches between Zoom in and Zoom out with the map. Uses shared menu prompt opacity.");
+                ImGui::TreePop();
+            }
+            if(ImGui::TreeNode("Dungeon map buttons")) {
+                auto& p=o.prompts;
+                changed|=ImGui::SliderFloat("X offset",&p.x,-400,400,"%.1f",ImGuiSliderFlags_AlwaysClamp);
+                changed|=ImGui::SliderFloat("Y offset",&p.y,-240,240,"%.1f",ImGuiSliderFlags_AlwaysClamp);
+                changed|=ImGui::SliderFloat("Scale",&p.scale,.5f,2,"%.2fx",ImGuiSliderFlags_AlwaysClamp);
+                changed|=ImGui::SliderFloat("Button icon scale",&p.icon_scale,.5f,2,"%.2fx",ImGuiSliderFlags_AlwaysClamp);
+                changed|=ImGui::SliderFloat("Spacing",&p.spacing,0,60,"%.1f",ImGuiSliderFlags_AlwaysClamp);
+                if(ImGui::Button("Reset dungeon map buttons")){p=DungeonMap::Options{}.prompts;o.prompt_group={};changed=true;}
+                ImGui::TextWrapped("One layout for Move map, A Zoom, Move cursor and B Return. All rows share the same text size, icon size and alignment. Move map fades without shifting the other rows.");
+                ImGui::TreePop();
+            }
+            if(ImGui::TreeNode("Dungeon map arrows")) {
+                changed|=ImGui::SliderFloat("Scale (all four)",&o.arrow_scale,.1f,3,"%.2fx",ImGuiSliderFlags_AlwaysClamp);
+                constexpr std::array<const char*,4> labels{"Up arrow","Down arrow","Left arrow","Right arrow"};
+                for(unsigned i=0;i<4;++i)if(ImGui::TreeNode(labels[i])) {
+                    changed|=ImGui::SliderFloat("X",&o.arrow_offsets[i][0],-800,800,"%.1f",ImGuiSliderFlags_AlwaysClamp);
+                    changed|=ImGui::SliderFloat("Y",&o.arrow_offsets[i][1],-480,480,"%.1f",ImGuiSliderFlags_AlwaysClamp);
+                    if(ImGui::Button("Reset position")){o.arrow_offsets[i]={};changed=true;}
+                    ImGui::TreePop();
+                }
+                if(ImGui::Button("Reset all arrows")){o.arrow_scale=1;o.arrow_offsets={};changed=true;}
                 ImGui::TreePop();
             }
             if(ImGui::TreeNode("Dungeon side panels")) {
@@ -2196,7 +2315,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
                 "Floor selector", "Location name", "B Return button", "A Zoom button", "Item preview model", "Item description box", "Magnifying glass"};
             for(unsigned i=0;i<DungeonMap::Count;++i) {
                 ImGui::PushID(int(i)+1800);
-                if(ImGui::TreeNode(labels[i])) {
+                if(i!=DungeonMap::Zoom&&ImGui::TreeNode(labels[i])) {
                     auto& p=o.poses[i];const bool model=i==DungeonMap::Model,description=i==DungeonMap::Description;
                     changed|=ImGui::SliderFloat("X",&p.x,model?-20.f:description?-320.f:-512.f,model?20.f:description?320.f:512.f,"%.1f",ImGuiSliderFlags_AlwaysClamp);
                     changed|=ImGui::SliderFloat("Y",&p.y,model?-20.f:-240.f,model?20.f:240.f,"%.1f",ImGuiSliderFlags_AlwaysClamp);
@@ -2385,7 +2504,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             }
             ImGui::TextWrapped("Presets update the sliders; Apply installs them. Other archive layouts are preserved.");
         }
-        if(ImGui::CollapsingHeader("Audio")) { audio_accuracy_controls(); }
+        if(ImGui::CollapsingHeader("Audio")) { audio_accuracy_controls(); mute_music_control(); }
         if(ImGui::CollapsingHeader("Audio diagnostics")) {
             static bool pending=false;
             if(!pending&&ImGui::Button("Capture rupee audio (10 seconds)")) {
@@ -2469,6 +2588,13 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
             if(ImGui::IsItemDeactivatedAfterEdit())
                 state.status=state.settings.Save(state.directory+"presentation.json")?
                     "Magic bar height saved (applied live)":"Magic bar height save FAILED";
+            bool width_changed=ImGui::SliderFloat("Magic bar width",&state.settings.player_hud.magic_width,
+                .5f,3.f,"%.2fx",ImGuiSliderFlags_AlwaysClamp);
+            hover_help("Extends the fill, black background, border and shadow together to the right. Shares the Width control in HUD → Magic meter.");
+            ImGui::SameLine();
+            if(ImGui::Button("Reset magic bar width")){state.settings.player_hud.magic_width=1.f;width_changed=true;}
+            if(width_changed){HudAdjustments::Apply(state.settings.player_hud);
+                state.status=state.settings.Save(state.directory+"presentation.json")?"Magic bar width saved":"Magic bar width save FAILED";}
             ImGui::SliderFloat("D-pad Y", &state.settings.dpad_y,
                 -120.f,120.f,"%.1f",ImGuiSliderFlags_AlwaysClamp);
             apply |= ImGui::IsItemDeactivatedAfterEdit();
@@ -3065,7 +3191,7 @@ void Overlay::Draw(vk::CommandBuffer command, vk::Framebuffer framebuffer,
         ImGui::SliderFloat("Opacity", &state.settings.opacity, .2f, 1.f);
         ImGui::SliderFloat("Indicator X (normalized)", &state.settings.x, 0.f, .75f);
         ImGui::SliderFloat("Indicator Y (normalized)", &state.settings.y, 0.f, .9f);
-        ImGui::TextUnformatted("All available settings apply live; no restart needed.");
+        ImGui::TextUnformatted("Settings apply live unless marked as requiring a restart.");
         ImGui::Separator();
         ImGui::TextUnformatted("Form camera capture (Link/Goron/Zora/Deku)");
         ImGui::TextWrapped("Start before reproducing a camera issue, then stop afterward. For Deku, include burrowing, flight, C-stick movement, petal release and landing.");

@@ -207,7 +207,9 @@ public:
                 auto half=value;
                 for(unsigned r=0;r<rows;++r) {
                     if(value[r]!=e.value[r])return {};
-                    half[r][3]=(*e.half)[r][3];
+                    if(coastal && CoastalWaterInterpolation::Patterns[*coastal].rotating)
+                        half[r]=(*e.half)[r];
+                    else half[r][3]=(*e.half)[r][3];
                 }
                 return half;
             }

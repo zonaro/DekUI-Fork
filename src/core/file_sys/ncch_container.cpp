@@ -3,6 +3,9 @@
 // Refer to the license.txt file included.
 
 #include <cstring>
+#ifdef ENABLE_MM3D_PRESENTATION
+#include "mm3d/translation.h"
+#endif
 #include <memory>
 #include <span>
 #include <cryptopp/aes.h>
